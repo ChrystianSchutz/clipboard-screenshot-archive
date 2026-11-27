@@ -330,7 +330,7 @@ The E2E suite checks the renderer surface, navigation blocking (to a website and
 | E2E            | 81 Playwright tests against the built Electron app in the sandbox: capture, search, operators, compare, privacy, screenshots and OCR, the gallery, the context menu, multi-selection, themes, security | `npm run test:e2e`                                   |
 | Packaged smoke | Launches the packaged EXE hidden; checks that koffi loads, the Win32 listener registers, React renders and IPC round-trips through the preload                                                         | `npm run package && node scripts/smoke-packaged.mjs` |
 
-- Vitest runs 1,937 unit and integration tests in 97 files. 17 more are skipped by default: opt-in benchmarks and a few checks that need an OS feature (such as symlinks).
+- Vitest runs 1,941 unit and integration tests in 97 files. 17 more are skipped by default: opt-in benchmarks and a few checks that need an OS feature (such as symlinks).
 - Of the 81 E2E tests, 75 run by default. The other 6 only capture screenshots for the README and for visual review.
 - `npm run check` runs typecheck, ESLint, Prettier and the unit suite in one go.
 - The E2E suite is windowless (see the sandbox above). Run it while you work: it never steals focus or touches your clipboard.

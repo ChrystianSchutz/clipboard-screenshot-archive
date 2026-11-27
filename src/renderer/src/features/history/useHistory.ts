@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { Category } from '@shared/categories';
 import type {
   ClipKind,
@@ -127,26 +127,190 @@ export interface HistoryState {
   readonly clips: readonly ClipSummary[];
   readonly hasMore: boolean;
   readonly loading: boolean;
+  /**
+   * Rows that were shown before and are missing from `clips` only for the moment: the history
+   * changed while `clips` was fetched, so a re-copied row can be absent until the refresh that is
+   * already on its way shows it at the top. Empty once a list arrives that nothing changed under.
+   * A selection keeps these (see the views), instead of dropping them for good against a list
+   * that is about to be replaced.
+   */
+  readonly missing: readonly ClipSummary[];
   readonly error: string | null;
   readonly loadMore: () => void;
 }
 
-/**
- * Loads the history for the given filters, pages through it on demand and reloads when the
- * main process reports a change. Responses that arrive after a newer request are dropped,
- * so fast typing can never show results for an old query.
- */
-/** What a refresh needs to know about the rows on screen: how many, and where the last one is. */
-function rememberRows(
-  counter: { current: number },
-  end: { current: HistoryCursor | null },
-  rows: readonly ClipSummary[],
-): void {
-  counter.current = rows.length;
-  const last = rows.at(-1);
-  end.current = last ? cursorOf(last) : null;
+/** What the hook shows; the loader replaces it in one update per response. */
+interface Shown {
+  readonly clips: readonly ClipSummary[];
+  readonly cursor: HistoryCursor | null;
+  readonly error: string | null;
+  /** The query the shown list answers; while it differs from the current one, a load is pending. */
+  readonly loadedKey: string | null;
+  readonly loadingMore: boolean;
+  readonly missing: readonly ClipSummary[];
 }
 
+const NOTHING_SHOWN: Shown = {
+  clips: NO_CLIPS,
+  cursor: null,
+  error: null,
+  loadedKey: null,
+  loadingMore: false,
+  missing: NO_CLIPS,
+};
+
+type Job = 'first' | 'refresh' | 'more';
+
+/**
+ * Runs the list's requests one at a time: the first page of a query, refreshes after history
+ * changes, and "load more" pages. All bookkeeping is plain fields read synchronously, never React
+ * state that could be one render behind, so no request can overtake or discard another:
+ *
+ * - A change that arrives while a request runs only marks the list dirty; one refresh follows when
+ *   that request is done. A refresh in progress is never thrown away to start over.
+ * - A "load more" asked for meanwhile runs before that refresh, so constant changes cannot starve
+ *   paging.
+ * - A new query (`setQuery`, also to "nothing" for an invalid regex) abandons the old one at once:
+ *   no further page of it is fetched and its answers are dropped.
+ */
+export class HistoryLoader {
+  private generation = 0;
+  private filters: HistoryFilters | null = null;
+  private key = '';
+  private busy = false;
+  private dirty = false;
+  private wantMore = false;
+  private rows: readonly ClipSummary[] = NO_CLIPS;
+  private missing: readonly ClipSummary[] = NO_CLIPS;
+  private cursor: HistoryCursor | null = null;
+  private readonly show: (patch: Partial<Shown>) => void;
+
+  constructor(show: (patch: Partial<Shown>) => void) {
+    this.show = show;
+  }
+
+  /** Starts over for these filters, or stops (`null`: an invalid regex, or unmounting). */
+  setQuery(filters: HistoryFilters | null, key: string): void {
+    this.generation++;
+    this.filters = filters;
+    this.key = key;
+    this.busy = false;
+    this.dirty = false;
+    this.wantMore = false;
+    this.rows = NO_CLIPS;
+    this.missing = NO_CLIPS;
+    this.cursor = null;
+    if (filters !== null) this.run('first');
+  }
+
+  /** The history changed: refresh once the running request, if any, is done. */
+  changed(): void {
+    this.dirty = true;
+    this.next();
+  }
+
+  /** The user reached the end of the list: fetch the next page once the running request is done. */
+  more(): void {
+    this.wantMore = true;
+    this.next();
+  }
+
+  private next(): void {
+    if (this.busy || this.filters === null) return;
+    if (this.wantMore && this.cursor !== null) this.run('more');
+    else if (this.dirty) this.run('refresh');
+    else this.wantMore = false;
+  }
+
+  private run(job: Job): void {
+    const { filters, key, cursor } = this;
+    if (filters === null) return;
+    const generation = this.generation;
+    const isStale = (): boolean => generation !== this.generation;
+    const query = (request: HistoryQuery): Promise<HistoryPage> => api.history.query(request);
+    const base = toQuery(filters);
+    this.busy = true;
+    let request: Promise<HistoryPage>;
+    if (job === 'more' && cursor !== null) {
+      this.wantMore = false;
+      this.show({ loadingMore: true });
+      request = query({ ...base, before: cursor });
+    } else if (job === 'refresh') {
+      // The fetch starts now: a change from here on makes its answer unsettled.
+      this.dirty = false;
+      const last = this.rows.at(-1);
+      // Every row already shown, down to the last one, so rows (and selections on them) survive
+      // new copies above. No cap: a cap would drop rows the user scrolled to.
+      request = fetchRows(
+        query,
+        base,
+        Math.max(this.rows.length, PAGE_SIZE),
+        isStale,
+        last ? cursorOf(last) : null,
+      );
+    } else {
+      this.dirty = false;
+      request = query(base);
+    }
+    request
+      .then(
+        (page) => {
+          if (isStale()) return;
+          const rows = job === 'more' ? appendNew(this.rows, page.clips) : page.clips;
+          // Settled (nothing changed during the fetch): what is gone is really gone.
+          this.missing = this.dirty ? absentFrom(rows, [...this.rows, ...this.missing]) : NO_CLIPS;
+          this.rows = rows;
+          this.cursor = page.nextCursor;
+          this.show({
+            clips: rows,
+            cursor: page.nextCursor,
+            error: null,
+            loadedKey: key,
+            loadingMore: false,
+            missing: this.missing,
+          });
+        },
+        (cause: unknown) => {
+          if (isStale()) return;
+          this.show({ error: ipcErrorMessage(cause), loadedKey: key, loadingMore: false });
+        },
+      )
+      .finally(() => {
+        if (isStale()) return;
+        this.busy = false;
+        this.next();
+      });
+  }
+}
+
+/** The rows of `before` that `rows` lacks (each once). */
+function absentFrom(
+  rows: readonly ClipSummary[],
+  before: readonly ClipSummary[],
+): readonly ClipSummary[] {
+  const present = new Set(rows.map((row) => row.id));
+  const absent = before.filter((row) => {
+    if (present.has(row.id)) return false;
+    present.add(row.id);
+    return true;
+  });
+  return absent.length === 0 ? NO_CLIPS : absent;
+}
+
+/** `rows` plus the rows of `page` not in it yet (a re-copy can move a row across pages). */
+function appendNew(
+  rows: readonly ClipSummary[],
+  page: readonly ClipSummary[],
+): readonly ClipSummary[] {
+  const known = new Set(rows.map((row) => row.id));
+  return [...rows, ...page.filter((row) => !known.has(row.id))];
+}
+
+/**
+ * Loads the history for the given filters, pages through it on demand and refreshes when the main
+ * process reports a change (see `HistoryLoader`). Responses for an old query are dropped, so fast
+ * typing can never show results for it.
+ */
 export function useHistory(requested: HistoryFilters): HistoryState {
   // The filters by value: an equal object built anew (the view rebuilds it when the list of source
   // apps changes) is the same query, and must not reload the list (and drop rows) as if it were a
@@ -156,139 +320,32 @@ export function useHistory(requested: HistoryFilters): HistoryState {
   if (kept.key !== requestedKey) setKept({ filters: requested, key: requestedKey });
   const filters = kept.key === requestedKey ? kept.filters : requested;
 
-  const [clips, setClips] = useState<readonly ClipSummary[]>([]);
-  const [cursor, setCursor] = useState<HistoryCursor | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  /** The query the shown page answers; while it differs from the current one, a load is pending. */
-  const [loadedKey, setLoadedKey] = useState<string | null>(null);
-  const [loadingMore, setLoadingMore] = useState(false);
-  /** The refresh that is running, for which query; "load more" waits while it runs (see below). */
-  const [refreshRun, setRefreshRun] = useState<{ readonly key: string } | null>(null);
-  const requestId = useRef(0);
-  const loadedCount = useRef(0);
-  /** Position of the last loaded row: a refresh reloads at least down to it. */
-  const loadedEnd = useRef<HistoryCursor | null>(null);
-
-  const invalid = regexError(filters);
-  const loading = invalid === null && (loadedKey !== requestedKey || loadingMore);
-
-  /**
-   * Loads the first `count` rows (one page, or several on a refresh), and every row down to
-   * `through` when given, and replaces the list. Settles when the request is done, also when a
-   * newer request made its answer stale.
-   */
-  const load = useCallback(
-    (count: number, through: HistoryCursor | null = null): Promise<void> => {
-      const id = ++requestId.current;
-      const isStale = (): boolean => id !== requestId.current;
-      const settle = (): void => {
-        if (isStale()) return;
-        setLoadedKey(JSON.stringify(toQuery(filters)));
-        setLoadingMore(false);
-      };
-      // State changes only in the callbacks, never synchronously in the effects that call this.
-      const request =
-        count <= PAGE_SIZE && through === null
-          ? api.history.query(toQuery(filters, count))
-          : fetchRows(
-              (query) => api.history.query(query),
-              toQuery(filters),
-              count,
-              isStale,
-              through,
-            );
-      return request.then(
-        (page) => {
-          if (isStale()) return;
-          // All pages land in one update, so the list never collapses to a single page meanwhile.
-          setClips(page.clips);
-          setCursor(page.nextCursor);
-          setError(null);
-          rememberRows(loadedCount, loadedEnd, page.clips);
-          settle();
-        },
-        (cause: unknown) => {
-          if (isStale()) return;
-          setError(ipcErrorMessage(cause));
-          settle();
-        },
-      );
-    },
-    [filters],
+  const [shown, setShown] = useState<Shown>(NOTHING_SHOWN);
+  const [loader] = useState(
+    () => new HistoryLoader((patch) => setShown((current) => ({ ...current, ...patch }))),
   );
+  const invalid = regexError(filters);
 
   useEffect(() => {
-    if (invalid !== null) return;
-    void load(PAGE_SIZE);
-  }, [load, invalid]);
+    // An invalid regex stops the loader: nothing more of the old query, and nothing invalid, is sent.
+    loader.setQuery(invalid === null ? filters : null, requestedKey);
+    return () => loader.setQuery(null, '');
+  }, [loader, filters, invalid, requestedKey]);
 
-  const refreshing = refreshRun !== null && refreshRun.key === requestedKey;
+  useEffect(() => api.history.onChanged(() => loader.changed()), [loader]);
 
-  // Keep every row the user has already scrolled through when the history changes (a new copy,
-  // a deletion, or a screenshot whose text or analysis just became searchable): as many rows as
-  // before, and down to the last one shown, so rows (and selections on them) survive new copies
-  // above. There is no cap: a cap would drop rows the user scrolled to, selected ones included.
-  // The reload costs what scrolling there did, in pages of up to `MAX_REQUEST` rows.
-  //
-  // One refresh at a time: changes that arrive while one runs only mark the list dirty, and one
-  // more refresh follows when it is done. A running refresh is never thrown away to start over,
-  // so a deep list under a stream of copies still shows the newest rows after each round.
-  useEffect(() => {
-    let running = false;
-    let dirty = false;
-    let disposed = false; // new filters: their own load replaces this list
-    const run = { key: requestedKey };
-    const finish = (): void => setRefreshRun((current) => (current === run ? null : current));
-    const refresh = (): void => {
-      running = true;
-      dirty = false;
-      setRefreshRun(run);
-      void load(Math.max(loadedCount.current, PAGE_SIZE), loadedEnd.current).then(() => {
-        running = false;
-        if (dirty && !disposed) refresh();
-        else finish();
-      });
-    };
-    const unsubscribe = api.history.onChanged(() => {
-      if (running) dirty = true;
-      else refresh();
-    });
-    return () => {
-      disposed = true;
-      unsubscribe();
-    };
-  }, [load, requestedKey]);
-
+  const { cursor } = shown;
+  // A new callback with every page, so a view that watches the end of the list asks again.
   const loadMore = useCallback(() => {
-    // During a refresh the cursor is about to be replaced, and a page appended now would be
-    // dropped by the refresh anyway; the view asks again when this callback changes.
-    if (!cursor || loading || refreshing) return;
-    const id = ++requestId.current;
-    setLoadingMore(true);
-    api.history
-      .query({ ...toQuery(filters), before: cursor })
-      .then((page) => {
-        if (id !== requestId.current) return;
-        setClips((current) => {
-          const next = [...current, ...page.clips];
-          rememberRows(loadedCount, loadedEnd, next);
-          return next;
-        });
-        setCursor(page.nextCursor);
-      })
-      .catch((cause: unknown) => {
-        if (id === requestId.current) setError(ipcErrorMessage(cause));
-      })
-      .finally(() => {
-        if (id === requestId.current) setLoadingMore(false);
-      });
-  }, [cursor, filters, loading, refreshing]);
+    if (cursor !== null) loader.more();
+  }, [loader, cursor]);
 
   return {
-    clips: invalid === null ? clips : NO_CLIPS,
+    clips: invalid === null ? shown.clips : NO_CLIPS,
     hasMore: cursor !== null,
-    loading,
-    error: invalid ?? error,
+    loading: invalid === null && (shown.loadedKey !== requestedKey || shown.loadingMore),
+    missing: invalid === null ? shown.missing : NO_CLIPS,
+    error: invalid ?? shown.error,
     loadMore,
   };
 }

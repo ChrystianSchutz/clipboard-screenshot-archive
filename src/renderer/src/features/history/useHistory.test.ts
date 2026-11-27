@@ -2,7 +2,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ClipboardArchiveApi } from '@shared/ipc-contract';
-import type { ClipSummary, HistoryPage, HistoryQuery } from '@shared/types';
+import type { ClipSummary, HistoryCursor, HistoryPage, HistoryQuery } from '@shared/types';
 import { useListSelection } from '../../hooks/useListSelection';
 import { selectAll } from '../../lib/selection';
 import {
@@ -41,28 +41,47 @@ function server(total: number, budget: number) {
   });
 }
 
-/** A history that grows at the top, as new copies arrive, served like `server`. */
+/**
+ * A history that grows at the top as new copies arrive, served like `server` and ordered like the
+ * repository (newest copy first, the higher id first on a tie). `recopy` moves a row to the top,
+ * as copying its text again does. `onQuery` runs before each request is answered; with `async`
+ * set, answers arrive in later tasks, so React renders each published list on its own.
+ */
 function growingServer(total: number, budget: number, nextPage?: number) {
   let all = rows(total);
+  let clock = total;
+  let lastId = total;
+  const hooks: { onQuery?: (request: HistoryQuery) => void; async?: boolean } = {};
+  const isAfter = (row: ClipSummary, cursor: HistoryCursor): boolean =>
+    row.lastCopiedAt < cursor.lastCopiedAt ||
+    (row.lastCopiedAt === cursor.lastCopiedAt && row.id < cursor.id);
   const query = vi.fn((request: HistoryQuery): Promise<HistoryPage> => {
-    const start = request.before ? all.findIndex((row) => row.id < request.before!.id) : 0;
+    hooks.onQuery?.(request);
+    const before = request.before;
+    const start = before ? all.findIndex((row) => isAfter(row, before)) : 0;
     const from = start === -1 ? all.length : start;
     // `nextPage`: the size of a "load more" page, so a test reaches a deep scroll in a few steps.
     const size = request.before && nextPage ? nextPage : (request.limit ?? 60);
     const page = all.slice(from, from + Math.min(size, budget));
     const last = page.at(-1);
     const more = from + page.length < all.length;
-    return Promise.resolve({ clips: page, nextCursor: more && last ? cursorOf(last) : null });
+    const answer = { clips: page, nextCursor: more && last ? cursorOf(last) : null };
+    if (!hooks.async) return Promise.resolve(answer);
+    return new Promise((resolve) => setTimeout(() => resolve(answer), 0));
   });
   const copy = (count: number): void => {
-    const top = all[0]?.id ?? 0;
-    const added = Array.from({ length: count }, (_, index) => {
-      const id = top + count - index;
-      return { id, lastCopiedAt: id } as unknown as ClipSummary;
-    });
+    const added = Array.from({ length: count }, () => {
+      const row = { id: ++lastId, lastCopiedAt: ++clock } as unknown as ClipSummary;
+      return row;
+    }).reverse();
     all = [...added, ...all];
   };
-  return { query, copy };
+  const recopy = (id: number): void => {
+    const row = all.find((candidate) => candidate.id === id);
+    if (!row) throw new Error(`no row ${String(id)}`);
+    all = [{ ...row, lastCopiedAt: ++clock }, ...all.filter((candidate) => candidate !== row)];
+  };
+  return { query, copy, recopy, hooks };
 }
 
 describe('fetchRows', () => {
@@ -260,7 +279,9 @@ describe('useHistory refresh', () => {
   /** Renders the hook and scrolls it through 5,040 rows of a 6,000-row history. */
   async function deepList(history: ReturnType<typeof growingServer>) {
     install(history.query);
-    const hook = renderHook(() => useHistory(DEFAULT_FILTERS));
+    const hook = renderHook(({ filters }: { filters: HistoryFilters }) => useHistory(filters), {
+      initialProps: { filters: DEFAULT_FILTERS },
+    });
     await waitFor(() => expect(hook.result.current.clips).toHaveLength(60));
     for (const loaded of [1_305, 2_550, 3_795, 5_040]) {
       act(() => hook.result.current.loadMore());
@@ -312,5 +333,139 @@ describe('useHistory refresh', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(landed).toBe(2);
     expect(result.current.clips).toHaveLength(5_046);
+  });
+
+  /** History, selection and actions wired like the views wire them. */
+  function renderView(onRender: (state: ReturnType<typeof useHistory>) => void = () => undefined) {
+    return renderHook(() => {
+      const state = useHistory(DEFAULT_FILTERS);
+      onRender(state);
+      const ids = state.clips.map((clip) => clip.id);
+      const list = useListSelection([...ids, ...state.missing.map((clip) => clip.id)]);
+      const byId = new Map([...state.missing, ...state.clips].map((clip) => [clip.id, clip]));
+      const selected = list.selectedIds.flatMap((id) => byId.get(id) ?? []);
+      const actions = useSelectionActions({
+        noun: 'clip',
+        selection: list.selection,
+        clips: selected,
+        ids,
+        onNotify: vi.fn(),
+        onRemoved: vi.fn(),
+      });
+      return { state, list, actions, selected };
+    });
+  }
+
+  it('regression: re-copying a selected clip during a refresh keeps all 50 selected', async () => {
+    const history = growingServer(300, 30);
+    install(history.query);
+    let sawMissing = false;
+    const { result } = renderView((state) => {
+      if (state.missing.length > 0) sawMissing = true;
+    });
+    await waitFor(() => expect(result.current.state.clips).toHaveLength(30));
+    for (const loaded of [60, 90]) {
+      act(() => result.current.state.loadMore());
+      await waitFor(() => expect(result.current.state.clips).toHaveLength(loaded));
+    }
+    const picked = result.current.state.clips.slice(20, 70).map((clip) => clip.id);
+    act(() =>
+      result.current.list.update(() => ({
+        selected: new Set(picked),
+        anchor: picked[0] ?? null,
+        focus: picked[0] ?? null,
+      })),
+    );
+    await act(() => result.current.actions.requestDelete());
+    expect(result.current.actions.confirmingDelete).toBe(true);
+
+    // A new copy starts a refresh. After it has read its first page, a selected clip from the
+    // second page is copied again: it moves above the refresh's cursor.
+    const target = picked[25]!;
+    history.hooks.async = true;
+    let requests = 0;
+    history.hooks.onQuery = () => {
+      if (++requests !== 2) return;
+      history.recopy(target);
+      changed?.();
+    };
+    history.copy(1);
+    act(() => changed?.());
+
+    await waitFor(() => expect(result.current.state.clips[0]?.id).toBe(target));
+    await waitFor(() => expect(result.current.state.missing).toHaveLength(0));
+    expect(sawMissing).toBe(true); // the first refresh's list, without the clip, was shown
+    // Before the fix the first refresh's list lacked the clip and the selection dropped it.
+    expect(result.current.list.selectedIds).toHaveLength(50);
+    expect(result.current.list.selectedIds).toContain(target);
+    expect(result.current.selected).toHaveLength(50);
+    expect(result.current.actions.confirmingDelete).toBe(true);
+  });
+
+  it('regression: "load more" right after a change does not discard the refresh', async () => {
+    const history = growingServer(300, 500);
+    install(history.query);
+    const { result } = renderHook(() => useHistory(DEFAULT_FILTERS));
+    await waitFor(() => expect(result.current.clips).toHaveLength(60));
+
+    history.copy(1);
+    // Both before React commits anything: the callback is the one from before the change.
+    const { loadMore } = result.current;
+    act(() => {
+      changed?.();
+      loadMore();
+    });
+
+    await waitFor(() => expect(result.current.clips).toHaveLength(121));
+    expect(result.current.clips[0]?.id).toBe(301);
+  });
+
+  it('regression: a change in every refresh round does not starve "load more"', async () => {
+    const history = growingServer(300, 500);
+    install(history.query);
+    const { result } = renderHook(() => useHistory(DEFAULT_FILTERS));
+    await waitFor(() => expect(result.current.clips).toHaveLength(60));
+
+    // Every refresh round sees one more change, six rounds in all. "Load more" asks for the rows
+    // after the last one shown (refreshes keep that row last, so it does not move meanwhile).
+    const lastShown = result.current.clips.at(-1)!.id;
+    let rounds = 0;
+    let roundsBeforeMore: number | null = null;
+    history.hooks.onQuery = (request) => {
+      if (request.before?.id === lastShown) {
+        roundsBeforeMore ??= rounds;
+      } else if (!request.before && rounds < 6) {
+        rounds++;
+        history.copy(1);
+        changed?.();
+      }
+    };
+    act(() => changed?.());
+    act(() => result.current.loadMore());
+
+    await waitFor(() => expect(rounds).toBe(6));
+    await waitFor(() => expect(result.current.clips[0]?.id).toBe(306));
+    // The page was fetched between rounds, not after the changes stopped.
+    expect(roundsBeforeMore).not.toBeNull();
+    expect(roundsBeforeMore).toBeLessThan(6);
+    expect(result.current.clips).toHaveLength(126);
+  });
+
+  it('regression: an invalid regex stops the old refresh and sends nothing invalid', async () => {
+    const history = growingServer(6_000, 2_000, 1_245);
+    const { result, rerender } = await deepList(history);
+
+    act(() => changed?.()); // the refresh asks for its first 1,000-row page
+    expect(history.query).toHaveBeenCalledOnce();
+    rerender({ filters: { ...DEFAULT_FILTERS, text: '[', regex: true } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Before the fix the old query went on paging after the filter changed.
+    expect(history.query).toHaveBeenCalledOnce();
+    expect(result.current.error).not.toBeNull();
+
+    act(() => changed?.());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(history.query).toHaveBeenCalledOnce();
+    expect(history.query.mock.calls.some(([request]) => request.regex)).toBe(false);
   });
 });
