@@ -65,7 +65,7 @@ export function HistoryView({
     () => applySearchOperators({ ...filters, text: debouncedText }, apps),
     [filters, debouncedText, apps],
   );
-  const { clips, missing, hasMore, loading, error, loadMore } = useHistory(effective.filters);
+  const { clips, hasMore, loading, error, loadMore } = useHistory(effective.filters);
   const [markedId, setMarkedId] = useState<number | null>(null);
   const now = useNow();
   const clipMenu = useClipContextMenu();
@@ -75,19 +75,13 @@ export function HistoryView({
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   const ids = useMemo(() => clips.map((clip) => clip.id), [clips]);
-  // Rows missing only until the refresh on its way shows them again stay selectable, so a
-  // selection (and a pending delete) survives a re-copy of one of its rows during a refresh.
-  const selectableIds = useMemo(
-    () => (missing.length === 0 ? ids : [...ids, ...missing.map((clip) => clip.id)]),
-    [ids, missing],
-  );
-  const { selection, selectedIds, update: updateSelection } = useListSelection(selectableIds);
+  const { selection, selectedIds, update: updateSelection } = useListSelection(ids);
   /** The row with the focus ring, where arrow keys move from. */
   const currentId = selection.focus;
   const selectedClips = useMemo(() => {
-    const byId = new Map([...missing, ...clips].map((clip) => [clip.id, clip]));
+    const byId = new Map(clips.map((clip) => [clip.id, clip]));
     return selectedIds.flatMap((id) => byId.get(id) ?? []);
-  }, [clips, missing, selectedIds]);
+  }, [clips, selectedIds]);
   const multi = selectedClips.length > 1;
   /** The one selected clip (preview, single-clip actions); `null` for none or several. */
   const selected = selectedClips.length === 1 ? (selectedClips[0] ?? null) : null;

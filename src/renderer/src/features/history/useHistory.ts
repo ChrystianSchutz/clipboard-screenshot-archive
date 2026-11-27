@@ -127,19 +127,11 @@ export interface HistoryState {
   readonly clips: readonly ClipSummary[];
   readonly hasMore: boolean;
   readonly loading: boolean;
-  /**
-   * Rows that were shown before and are missing from `clips` only for the moment: the history
-   * changed while `clips` was fetched, so a re-copied row can be absent until the refresh that is
-   * already on its way shows it at the top. Empty once a list arrives that nothing changed under.
-   * A selection keeps these (see the views), instead of dropping them for good against a list
-   * that is about to be replaced.
-   */
-  readonly missing: readonly ClipSummary[];
   readonly error: string | null;
   readonly loadMore: () => void;
 }
 
-/** What the hook shows; the loader replaces it in one update per response. */
+/** What the hook shows; the loader replaces parts of it in one update per response. */
 interface Shown {
   readonly clips: readonly ClipSummary[];
   readonly cursor: HistoryCursor | null;
@@ -147,7 +139,6 @@ interface Shown {
   /** The query the shown list answers; while it differs from the current one, a load is pending. */
   readonly loadedKey: string | null;
   readonly loadingMore: boolean;
-  readonly missing: readonly ClipSummary[];
 }
 
 const NOTHING_SHOWN: Shown = {
@@ -156,20 +147,34 @@ const NOTHING_SHOWN: Shown = {
   error: null,
   loadedKey: null,
   loadingMore: false,
-  missing: NO_CLIPS,
 };
+
+/**
+ * How many refresh answers in a row are thrown away because the history changed while they were
+ * fetched, before one is shown anyway (see `HistoryLoader`).
+ */
+export const MAX_DISCARDED_REFRESHES = 2;
+/** First wait before a failed refresh is tried again; it doubles up to `MAX_RETRY_DELAY_MS`. */
+export const RETRY_DELAY_MS = 500;
+const MAX_RETRY_DELAY_MS = 8_000;
 
 type Job = 'first' | 'refresh' | 'more';
 
 /**
  * Runs the list's requests one at a time: the first page of a query, refreshes after history
  * changes, and "load more" pages. All bookkeeping is plain fields read synchronously, never React
- * state that could be one render behind, so no request can overtake or discard another:
+ * state that could be one render behind, so no request can overtake or discard another.
  *
- * - A change that arrives while a request runs only marks the list dirty; one refresh follows when
- *   that request is done. A refresh in progress is never thrown away to start over.
- * - A "load more" asked for meanwhile runs before that refresh, so constant changes cannot starve
- *   paging.
+ * - A change that arrives while a request runs only marks a refresh as needed; it runs when that
+ *   request is done. A "load more" asked for meanwhile runs first, so changes never starve paging.
+ * - Only settled lists are shown: when the history changed while a refresh was fetching, a row
+ *   could be missing only because it moved (a re-copy jumps above the refresh's cursor), so that
+ *   answer is thrown away and the refresh runs again. Under constant changes the answer is shown
+ *   anyway after `MAX_DISCARDED_REFRESHES` in a row, so the list cannot go stale forever; a
+ *   selected row that moved during that fetch may then drop from the selection, which is accepted.
+ * - A failed refresh keeps its error and stays needed: it is tried again at the next change, or
+ *   after a growing pause (`RETRY_DELAY_MS`), never in a tight loop. A "load more" page that
+ *   succeeds meanwhile only appends its rows; it clears neither the error nor the pending refresh.
  * - A new query (`setQuery`, also to "nothing" for an invalid regex) abandons the old one at once:
  *   no further page of it is fetched and its answers are dropped.
  */
@@ -178,15 +183,22 @@ export class HistoryLoader {
   private filters: HistoryFilters | null = null;
   private key = '';
   private busy = false;
+  /** The history changed since the last refresh began fetching: a refresh is needed. */
   private dirty = false;
   private wantMore = false;
+  private discarded = 0;
+  private refreshError: string | null = null;
+  private retryDelay = RETRY_DELAY_MS;
+  private retryAt = 0;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private rows: readonly ClipSummary[] = NO_CLIPS;
-  private missing: readonly ClipSummary[] = NO_CLIPS;
   private cursor: HistoryCursor | null = null;
   private readonly show: (patch: Partial<Shown>) => void;
+  private readonly now: () => number;
 
-  constructor(show: (patch: Partial<Shown>) => void) {
+  constructor(show: (patch: Partial<Shown>) => void, now: () => number = Date.now) {
     this.show = show;
+    this.now = now;
   }
 
   /** Starts over for these filters, or stops (`null`: an invalid regex, or unmounting). */
@@ -197,8 +209,12 @@ export class HistoryLoader {
     this.busy = false;
     this.dirty = false;
     this.wantMore = false;
+    this.discarded = 0;
+    this.refreshError = null;
+    this.retryDelay = RETRY_DELAY_MS;
+    this.retryAt = 0;
+    this.cancelRetry();
     this.rows = NO_CLIPS;
-    this.missing = NO_CLIPS;
     this.cursor = null;
     if (filters !== null) this.run('first');
   }
@@ -206,6 +222,7 @@ export class HistoryLoader {
   /** The history changed: refresh once the running request, if any, is done. */
   changed(): void {
     this.dirty = true;
+    this.retryAt = 0; // a new change is worth trying at once, even after a failure
     this.next();
   }
 
@@ -217,9 +234,26 @@ export class HistoryLoader {
 
   private next(): void {
     if (this.busy || this.filters === null) return;
-    if (this.wantMore && this.cursor !== null) this.run('more');
-    else if (this.dirty) this.run('refresh');
-    else this.wantMore = false;
+    if (this.wantMore && this.cursor !== null) {
+      this.run('more');
+      return;
+    }
+    this.wantMore = false;
+    if (!this.dirty) return;
+    const wait = this.retryAt - this.now();
+    if (wait <= 0) this.run('refresh');
+    else if (this.retryTimer === null) {
+      const generation = this.generation;
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = null;
+        if (generation === this.generation) this.next();
+      }, wait);
+    }
+  }
+
+  private cancelRetry(): void {
+    if (this.retryTimer !== null) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
   }
 
   private run(job: Job): void {
@@ -238,6 +272,7 @@ export class HistoryLoader {
     } else if (job === 'refresh') {
       // The fetch starts now: a change from here on makes its answer unsettled.
       this.dirty = false;
+      this.cancelRetry();
       const last = this.rows.at(-1);
       // Every row already shown, down to the last one, so rows (and selections on them) survive
       // new copies above. No cap: a cap would drop rows the user scrolled to.
@@ -256,23 +291,38 @@ export class HistoryLoader {
       .then(
         (page) => {
           if (isStale()) return;
-          const rows = job === 'more' ? appendNew(this.rows, page.clips) : page.clips;
-          // Settled (nothing changed during the fetch): what is gone is really gone.
-          this.missing = this.dirty ? absentFrom(rows, [...this.rows, ...this.missing]) : NO_CLIPS;
-          this.rows = rows;
+          if (job === 'more') {
+            this.appendPage(page);
+            return;
+          }
+          if (job === 'refresh' && this.dirty && this.discarded < MAX_DISCARDED_REFRESHES) {
+            this.discarded++; // unsettled: `dirty` is still set, so the refresh runs again
+            return;
+          }
+          this.discarded = 0;
+          this.refreshError = null;
+          this.retryDelay = RETRY_DELAY_MS;
+          this.rows = page.clips;
           this.cursor = page.nextCursor;
           this.show({
-            clips: rows,
+            clips: page.clips,
             cursor: page.nextCursor,
             error: null,
             loadedKey: key,
             loadingMore: false,
-            missing: this.missing,
           });
         },
         (cause: unknown) => {
           if (isStale()) return;
-          this.show({ error: ipcErrorMessage(cause), loadedKey: key, loadingMore: false });
+          const message = ipcErrorMessage(cause);
+          if (job === 'refresh') {
+            // Still needed: tried again at the next change, or after a growing pause.
+            this.refreshError = message;
+            this.dirty = true;
+            this.retryAt = this.now() + this.retryDelay;
+            this.retryDelay = Math.min(this.retryDelay * 2, MAX_RETRY_DELAY_MS);
+          }
+          this.show({ error: message, loadedKey: key, loadingMore: false });
         },
       )
       .finally(() => {
@@ -281,20 +331,18 @@ export class HistoryLoader {
         this.next();
       });
   }
-}
 
-/** The rows of `before` that `rows` lacks (each once). */
-function absentFrom(
-  rows: readonly ClipSummary[],
-  before: readonly ClipSummary[],
-): readonly ClipSummary[] {
-  const present = new Set(rows.map((row) => row.id));
-  const absent = before.filter((row) => {
-    if (present.has(row.id)) return false;
-    present.add(row.id);
-    return true;
-  });
-  return absent.length === 0 ? NO_CLIPS : absent;
+  /** A "load more" page: only adds rows; a failed or pending refresh stays as it was. */
+  private appendPage(page: HistoryPage): void {
+    this.rows = appendNew(this.rows, page.clips);
+    this.cursor = page.nextCursor;
+    this.show({
+      clips: this.rows,
+      cursor: page.nextCursor,
+      error: this.refreshError,
+      loadingMore: false,
+    });
+  }
 }
 
 /** `rows` plus the rows of `page` not in it yet (a re-copy can move a row across pages). */
@@ -344,7 +392,6 @@ export function useHistory(requested: HistoryFilters): HistoryState {
     clips: invalid === null ? shown.clips : NO_CLIPS,
     hasMore: cursor !== null,
     loading: invalid === null && (shown.loadedKey !== requestedKey || shown.loadingMore),
-    missing: invalid === null ? shown.missing : NO_CLIPS,
     error: invalid ?? shown.error,
     loadMore,
   };

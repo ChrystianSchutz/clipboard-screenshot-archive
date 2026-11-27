@@ -9,6 +9,7 @@ import {
   cursorOf,
   DEFAULT_FILTERS,
   fetchRows,
+  MAX_DISCARDED_REFRESHES,
   useHistory,
   type HistoryFilters,
 } from './useHistory';
@@ -44,19 +45,26 @@ function server(total: number, budget: number) {
 /**
  * A history that grows at the top as new copies arrive, served like `server` and ordered like the
  * repository (newest copy first, the higher id first on a tie). `recopy` moves a row to the top,
- * as copying its text again does. `onQuery` runs before each request is answered; with `async`
- * set, answers arrive in later tasks, so React renders each published list on its own.
+ * as copying its text again does. `onQuery` runs before each request is answered, `fail` makes
+ * it reject; with `async` set, answers arrive in later tasks, so React renders each published list
+ * on its own.
  */
 function growingServer(total: number, budget: number, nextPage?: number) {
   let all = rows(total);
   let clock = total;
   let lastId = total;
-  const hooks: { onQuery?: (request: HistoryQuery) => void; async?: boolean } = {};
+  const hooks: {
+    onQuery?: (request: HistoryQuery) => void;
+    /** Rejects this request instead of answering it. */
+    fail?: (request: HistoryQuery) => boolean;
+    async?: boolean;
+  } = {};
   const isAfter = (row: ClipSummary, cursor: HistoryCursor): boolean =>
     row.lastCopiedAt < cursor.lastCopiedAt ||
     (row.lastCopiedAt === cursor.lastCopiedAt && row.id < cursor.id);
   const query = vi.fn((request: HistoryQuery): Promise<HistoryPage> => {
     hooks.onQuery?.(request);
+    if (hooks.fail?.(request)) return Promise.reject(new Error('The history is busy'));
     const before = request.before;
     const start = before ? all.findIndex((row) => isAfter(row, before)) : 0;
     const from = start === -1 ? all.length : start;
@@ -147,9 +155,11 @@ describe('fetchRows', () => {
 
 describe('useHistory refresh', () => {
   let changed: (() => void) | null;
+  let removeMany: ReturnType<typeof vi.fn<(ids: readonly number[]) => Promise<number>>>;
 
   beforeEach(() => {
     changed = null;
+    removeMany = vi.fn((ids: readonly number[]) => Promise.resolve(ids.length));
   });
 
   afterEach(() => {
@@ -160,6 +170,7 @@ describe('useHistory refresh', () => {
     (window as { clipboardArchive?: unknown }).clipboardArchive = {
       history: {
         query,
+        removeMany,
         onChanged: (listener: () => void) => {
           changed = listener;
           return () => {
@@ -335,14 +346,14 @@ describe('useHistory refresh', () => {
     expect(result.current.clips).toHaveLength(5_046);
   });
 
-  /** History, selection and actions wired like the views wire them. */
+  /** History, selection and actions wired like the views wire them: rendered rows only. */
   function renderView(onRender: (state: ReturnType<typeof useHistory>) => void = () => undefined) {
     return renderHook(() => {
       const state = useHistory(DEFAULT_FILTERS);
       onRender(state);
       const ids = state.clips.map((clip) => clip.id);
-      const list = useListSelection([...ids, ...state.missing.map((clip) => clip.id)]);
-      const byId = new Map([...state.missing, ...state.clips].map((clip) => [clip.id, clip]));
+      const list = useListSelection(ids);
+      const byId = new Map(state.clips.map((clip) => [clip.id, clip]));
       const selected = list.selectedIds.flatMap((id) => byId.get(id) ?? []);
       const actions = useSelectionActions({
         noun: 'clip',
@@ -356,13 +367,12 @@ describe('useHistory refresh', () => {
     });
   }
 
-  it('regression: re-copying a selected clip during a refresh keeps all 50 selected', async () => {
+  /** 90 rows of a 300-row history in pages of 30, rows 21-70 selected, the delete confirmation open. */
+  async function fiftySelected(onRender?: (state: ReturnType<typeof useHistory>) => void) {
     const history = growingServer(300, 30);
     install(history.query);
-    let sawMissing = false;
-    const { result } = renderView((state) => {
-      if (state.missing.length > 0) sawMissing = true;
-    });
+    const view = renderView(onRender);
+    const { result } = view;
     await waitFor(() => expect(result.current.state.clips).toHaveLength(30));
     for (const loaded of [60, 90]) {
       act(() => result.current.state.loadMore());
@@ -378,10 +388,21 @@ describe('useHistory refresh', () => {
     );
     await act(() => result.current.actions.requestDelete());
     expect(result.current.actions.confirmingDelete).toBe(true);
+    return { history, picked, ...view };
+  }
+
+  it('regression: re-copying a selected clip during a refresh keeps all 50 selected', async () => {
+    let target = 0;
+    let watching = false;
+    let renderedWithout = false;
+    const { history, picked, result } = await fiftySelected((state) => {
+      const ids = state.clips.map((clip) => clip.id);
+      if (watching && ids.length > 0 && !ids.includes(target)) renderedWithout = true;
+    });
 
     // A new copy starts a refresh. After it has read its first page, a selected clip from the
     // second page is copied again: it moves above the refresh's cursor.
-    const target = picked[25]!;
+    target = picked[25]!;
     history.hooks.async = true;
     let requests = 0;
     history.hooks.onQuery = () => {
@@ -390,12 +411,12 @@ describe('useHistory refresh', () => {
       changed?.();
     };
     history.copy(1);
+    watching = true;
     act(() => changed?.());
 
     await waitFor(() => expect(result.current.state.clips[0]?.id).toBe(target));
-    await waitFor(() => expect(result.current.state.missing).toHaveLength(0));
-    expect(sawMissing).toBe(true); // the first refresh's list, without the clip, was shown
-    // Before the fix the first refresh's list lacked the clip and the selection dropped it.
+    // The first refresh's answer lacked the clip: it was thrown away, never shown.
+    expect(renderedWithout).toBe(false);
     expect(result.current.list.selectedIds).toHaveLength(50);
     expect(result.current.list.selectedIds).toContain(target);
     expect(result.current.selected).toHaveLength(50);
@@ -467,5 +488,93 @@ describe('useHistory refresh', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(history.query).toHaveBeenCalledOnce();
     expect(history.query.mock.calls.some(([request]) => request.regex)).toBe(false);
+  });
+
+  it('regression: a failed refresh survives a successful "load more" and is tried again', async () => {
+    const { history, picked, result } = await fiftySelected();
+    const target = picked[25]!;
+    let failures = 0;
+    history.hooks.fail = (request) => !request.before && failures++ === 0;
+    history.recopy(target);
+    act(() => changed?.());
+    await waitFor(() => expect(result.current.state.error).not.toBeNull());
+
+    // A page appended meanwhile fetched only older rows: the refresh is still owed.
+    act(() => result.current.state.loadMore());
+    await waitFor(() => expect(result.current.state.clips).toHaveLength(120));
+    expect(result.current.state.error).not.toBeNull();
+    expect(result.current.list.selectedIds).toContain(target);
+
+    // The retry (after a short pause, no change needed) brings the re-copied clip to the top.
+    await waitFor(() => expect(result.current.state.clips[0]?.id).toBe(target), {
+      timeout: 3_000,
+    });
+    expect(result.current.state.error).toBeNull();
+    expect(failures).toBe(2); // one failure, one retry
+    expect(result.current.list.selectedIds).toHaveLength(50);
+    expect(result.current.actions.confirmingDelete).toBe(true);
+  });
+
+  it('under constant changes, shows a refresh after a bounded number of thrown-away rounds', async () => {
+    const history = growingServer(300, 500);
+    install(history.query);
+    const tops: number[] = [];
+    const { result } = renderHook(() => {
+      const state = useHistory(DEFAULT_FILTERS);
+      const top = state.clips[0]?.id;
+      if (top !== undefined && top !== tops.at(-1)) tops.push(top);
+      return state;
+    });
+    await waitFor(() => expect(result.current.clips).toHaveLength(60));
+
+    // Every refresh round sees a new copy (ten rounds of churn). Answers arrive in separate
+    // tasks, so each shown list renders on its own.
+    history.hooks.async = true;
+    let rounds = 0;
+    history.hooks.onQuery = (request) => {
+      if (request.before || rounds >= 10) return;
+      rounds++;
+      history.copy(1);
+      changed?.();
+    };
+    act(() => changed?.());
+    await waitFor(() => expect(result.current.clips[0]?.id).toBe(310));
+
+    // Two answers thrown away, the third shown although it was unsettled too.
+    expect(MAX_DISCARDED_REFRESHES).toBe(2);
+    expect(tops[1]).toBe(303);
+  });
+
+  it('Ctrl+A and a bulk delete only ever cover rendered rows', async () => {
+    const { history, picked, result } = await fiftySelected();
+    const target = picked[25]!;
+    history.hooks.async = true;
+    let requests = 0;
+    history.hooks.onQuery = () => {
+      requests++;
+      if (requests === 2 || requests === 5) {
+        history.recopy(requests === 2 ? target : picked[40]!);
+        changed?.();
+      }
+    };
+    history.copy(1);
+    act(() => changed?.());
+
+    // Select everything at every step of the refresh rounds and compare with what is rendered.
+    for (let step = 0; step < 12; step++) {
+      await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+      act(() => result.current.list.update(selectAll));
+      const rendered = new Set(result.current.state.clips.map((clip) => clip.id));
+      expect(result.current.list.selectedIds.every((id) => rendered.has(id))).toBe(true);
+    }
+    await waitFor(() => expect(result.current.state.clips[0]?.id).toBe(picked[40]));
+    act(() => result.current.list.update(selectAll));
+    await act(() => result.current.actions.requestDelete());
+    await act(() => result.current.actions.requestDelete());
+
+    const rendered = new Set(result.current.state.clips.map((clip) => clip.id));
+    const deleted = removeMany.mock.calls.flatMap(([ids]) => ids);
+    expect(deleted.length).toBeGreaterThan(0);
+    expect(deleted.every((id) => rendered.has(id))).toBe(true);
   });
 });

@@ -74,7 +74,7 @@ export function ScreenshotsView({
     }),
     [debouncedText],
   );
-  const { clips, missing, hasMore, loading, error, loadMore } = useHistory(filters);
+  const { clips, hasMore, loading, error, loadMore } = useHistory(filters);
   const now = useNow();
   const clipMenu = useClipContextMenu();
 
@@ -83,19 +83,13 @@ export function ScreenshotsView({
   const sentinelRef = useRef<HTMLLIElement>(null);
 
   const ids = useMemo(() => clips.map((clip) => clip.id), [clips]);
-  // Rows missing only until the refresh on its way shows them again stay selectable, so a
-  // selection (and a pending delete) survives a re-copy of one of its rows during a refresh.
-  const selectableIds = useMemo(
-    () => (missing.length === 0 ? ids : [...ids, ...missing.map((clip) => clip.id)]),
-    [ids, missing],
-  );
-  const { selection, selectedIds, update: updateSelection } = useListSelection(selectableIds);
+  const { selection, selectedIds, update: updateSelection } = useListSelection(ids);
   /** The tile with keyboard focus (the only one in the tab order), where arrow keys move from. */
   const currentId = selection.focus;
   const selectedClips = useMemo(() => {
-    const byId = new Map([...missing, ...clips].map((clip) => [clip.id, clip]));
+    const byId = new Map(clips.map((clip) => [clip.id, clip]));
     return selectedIds.flatMap((id) => byId.get(id) ?? []);
-  }, [clips, missing, selectedIds]);
+  }, [clips, selectedIds]);
   const multi = selectedClips.length > 1;
   /** The one selected screenshot (preview, single actions); `null` for none or several. */
   const selected = selectedClips.length === 1 ? (selectedClips[0] ?? null) : null;

@@ -51,6 +51,24 @@ export interface ClipboardArchiveFixture {
 export const SCREENSHOT_DIR =
   process.env.CLIPBOARD_ARCHIVE_SCREENSHOTS === '1' ? 'docs/screenshots' : null;
 
+/**
+ * `electron.launch`, retried on `ETXTBSY`: on Linux, parallel workers can spawn the freshly
+ * unpacked Electron binary while the kernel still counts it as open for writing. That error is
+ * transient and says nothing about the app, so it is retried a few times; anything else is thrown.
+ */
+async function launchElectron(
+  options: Parameters<typeof electron.launch>[0],
+): Promise<ElectronApplication> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await electron.launch(options);
+    } catch (error) {
+      if (attempt >= 5 || !String(error).includes('ETXTBSY')) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+    }
+  }
+}
+
 export const test = base.extend<{
   /** Extra environment for the app (e.g. `CLIPBOARD_ARCHIVE_E2E_PLATFORM`), set with `test.use`. */
   appEnv: Record<string, string>;
@@ -60,7 +78,7 @@ export const test = base.extend<{
   clipboardArchive: async ({ appEnv }, use) => {
     // Every test gets a fresh profile, so tests never see each other's history.
     const userData = mkdtempSync(join(tmpdir(), 'clipboard-archive-e2e-'));
-    const app = await electron.launch({
+    const app = await launchElectron({
       // Parallel agents build into their own folder (CLIPBOARD_ARCHIVE_OUT_DIR) so builds never collide.
       args: [`${process.env.CLIPBOARD_ARCHIVE_OUT_DIR ?? 'out'}/main/index.js`],
       // E2E mode = sandbox: hidden windows, no tray, no global shortcuts, in-memory clipboard.
