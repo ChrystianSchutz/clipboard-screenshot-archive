@@ -28,7 +28,11 @@ test.describe('screenshots tab', () => {
     await palette.getByRole('tab', { name: 'Screenshots' }).click();
     await expect(palette.getByRole('heading', { name: 'No screenshots yet' })).toBeVisible();
     await expect(palette.locator('.empty')).toContainText(
-      process.platform === 'darwin' ? 'Cmd+Shift+4' : 'Win+Shift+S',
+      process.platform === 'darwin'
+        ? 'Cmd+Shift+4'
+        : process.platform === 'win32'
+          ? 'Win+Shift+S'
+          : 'PrtSc',
     );
 
     // Text clips never show up here, screenshots do.

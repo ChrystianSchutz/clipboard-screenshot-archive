@@ -82,8 +82,13 @@ async function main() {
     console.log('Packaged app smoke check passed.');
     return 0;
   } finally {
-    // Electron's helper processes can hold the profile for a moment after exit.
-    rmSync(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    // Electron's helper processes can hold the profile for a moment after exit. A leftover
+    // temp folder is harmless, so a failed cleanup must not hide the smoke check's result.
+    try {
+      rmSync(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    } catch (error) {
+      console.warn(`Could not remove the temporary profile ${userData}: ${error.code ?? error}`);
+    }
   }
 }
 
