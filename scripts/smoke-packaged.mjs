@@ -49,8 +49,6 @@ const exe =
   args.find((arg) => !arg.startsWith('--')) ??
   join('release', pkg.version, 'win-unpacked', `${pkg.productName}.exe`);
 
-process.exitCode = await main();
-
 async function main() {
   if (capture && (process.env.CI !== 'true' || process.platform !== 'win32')) {
     console.error('--capture writes to the system clipboard: it runs only on a Windows CI runner.');
@@ -275,3 +273,6 @@ function printLogs(userData) {
     console.error(readFileSync(join(dir, name), 'utf8'));
   }
 }
+
+// Last, so every module-level constant above (the PowerShell scripts) is initialized first.
+process.exitCode = await main();
