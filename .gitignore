@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build output (electron-vite) and per-task build folders
+out/
+out-*/
+dist/
+
+# Packaged installers (electron-builder writes to release/<version>/)
+release*/
+
+# Test and coverage reports
+coverage/
+test-results/
+playwright-report/
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Python caches (helper scripts)
+__pycache__/
+
+# Local secrets and environment overrides
+.env*
+
+# Model weights are downloaded at run time into userData, never committed
+*.cact
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,4 @@
+{
+  "//": "cactus.js is a CommonJS (UMD) Emscripten build; the repo root is \"type\": \"module\", which would make Node load it as ESM with no exports.",
+  "type": "commonjs"
+}

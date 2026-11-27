@@ -1,0 +1,44 @@
+/* Category chips: quieter than the kind badge (outline, no fill), small radius, theme tokens only. */
+
+.category-chips {
+  display: inline-flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.category-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+button.category-chip {
+  cursor: pointer;
+}
+button.category-chip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+button.category-chip:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* A secret on the clipboard deserves a second look. */
+.category-chip--secret {
+  border-color: var(--removed-strong);
+  color: var(--removed);
+}

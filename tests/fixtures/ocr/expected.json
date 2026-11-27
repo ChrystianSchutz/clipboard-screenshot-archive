@@ -1,0 +1,38 @@
+{
+  "terminal": {
+    "width": 900,
+    "height": 216,
+    "lines": [
+      "PS C:\\work\\api> npm run sync",
+      "> sync@2.4.1 sync",
+      "> node scripts/sync.js --region eu-west-1",
+      "Fetching 1284 records from upstream...",
+      "Error: read ECONNRESET",
+      "    at TLSWrap.onStreamRead (node:internal/stream_base_commons:216:20)",
+      "  errno: -4077, code: 'ECONNRESET', syscall: 'read'",
+      "Retrying in 5 seconds (attempt 2 of 3)"
+    ]
+  },
+  "code": {
+    "width": 820,
+    "height": 199,
+    "lines": [
+      "export async function fetchInvoices(customerId: string) {",
+      "  const response = await fetch(`/api/invoices/${customerId}`);",
+      "  if (!response.ok) {",
+      "    throw new Error('Invoice request failed: ' + response.status);",
+      "  }",
+      "  return (await response.json()) as Invoice[];",
+      "}"
+    ]
+  },
+  "polish": {
+    "width": 860,
+    "height": 132,
+    "lines": [
+      "Zażółć gęślą jaźń.",
+      "Pchnąć w tę łódź jeża lub ośm skrzyń fig.",
+      "Spotkanie przeniesione na środę, godz. 14:30."
+    ]
+  }
+}

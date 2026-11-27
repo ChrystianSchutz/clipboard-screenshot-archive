@@ -1,0 +1,91 @@
+{
+  "name": "clipboard-screenshot-archive",
+  "productName": "Clipboard & Screenshot Archive",
+  "version": "0.1.0",
+  "description": "Local-first clipboard and screenshot history: every copy keeps the app and page it came from, screenshots get offline OCR so their text is searchable, and one shortcut diffs two JSON payloads regardless of key order.",
+  "main": "./out/main/index.js",
+  "license": "MIT",
+  "author": "Chrystian Schutz (https://github.com/ChrystianSchutz)",
+  "homepage": "https://github.com/ChrystianSchutz/clipboard-screenshot-archive#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ChrystianSchutz/clipboard-screenshot-archive.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ChrystianSchutz/clipboard-screenshot-archive/issues"
+  },
+  "keywords": [
+    "clipboard",
+    "clipboard-manager",
+    "clipboard-history",
+    "screenshot",
+    "screenshots",
+    "ocr",
+    "tesseract",
+    "json-diff",
+    "electron",
+    "react",
+    "typescript",
+    "windows",
+    "macos",
+    "privacy",
+    "local-first"
+  ],
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:bench": "vitest run --mode bench src/main/storage/search-performance.test.ts",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "npm run build && playwright test",
+    "demo:record": "electron-vite build && node scripts/record-demo.mjs",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm run test",
+    "package": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "koffi": "3.3.8",
+    "tesseract.js": "7.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.65.1",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "26.6.11",
+    "@types/react": "19.3.3",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "@vitest/coverage-v8": "5.1.2",
+    "diff": "9.0.0",
+    "electron": "45.5.0",
+    "electron-builder": "26.18.0",
+    "electron-vite": "6.0.0",
+    "eslint": "10.15.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.14.0",
+    "jsdom": "31.0.1",
+    "prettier": "3.10.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.74.0",
+    "vite": "8.4.0",
+    "vitest": "5.1.2",
+    "zod": "4.6.7"
+  },
+  "allowScripts": {
+    "koffi@3.3.8": true,
+    "electron-winstaller@5.4.0": true
+  }
+}

@@ -1,0 +1,276 @@
+/* Screenshot preview with a selectable OCR text layer. Colours come from the theme tokens. */
+
+.screenshot-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  min-height: 0;
+}
+
+.screenshot-view__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.screenshot-view__status {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* The layer is positioned over the image's top-left corner and sized to its rendered box. */
+.screenshot-view__canvas {
+  position: relative;
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.screenshot-view__image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 0; /* no radius on images */
+  user-select: none;
+}
+
+.ocr-text-layer {
+  position: absolute;
+  inset: 0 auto auto 0;
+  overflow: hidden;
+  line-height: 1;
+  /* Text is invisible but selectable; the selection highlight shows where it is. */
+  color: transparent;
+  cursor: text;
+}
+
+.ocr-text-layer__line {
+  display: contents;
+}
+
+.ocr-text-layer__word,
+.ocr-text-layer__space {
+  position: absolute;
+  white-space: pre;
+  transform-origin: 0 0;
+}
+
+.ocr-text-layer__word::selection,
+.ocr-text-layer__space::selection {
+  color: transparent;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.ocr-text-layer__line:hover > .ocr-text-layer__word {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  cursor: copy;
+}
+
+/* Outline of the selected analysis object; never catches the mouse, so text stays selectable. */
+.screenshot-view__highlight {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  pointer-events: none;
+}
+
+/* ---------- Screenshot preview (image + Analysis panel) ---------- */
+
+.screenshot-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.screenshot-preview__message {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* ---------- Analysis panel ---------- */
+
+.analysis-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+}
+
+.analysis-panel__title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.analysis-panel__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.analysis-panel__note,
+.analysis-panel__description,
+.analysis-panel__error,
+.analysis-panel__footer {
+  margin: 0;
+}
+
+.analysis-panel__note {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.analysis-panel__description {
+  color: var(--text-strong);
+  line-height: 1.45;
+}
+
+.analysis-panel__error {
+  color: var(--removed);
+  font-size: 12px;
+}
+
+/* Looks like a link, behaves like a button. */
+.analysis-panel__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-fg);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.analysis-panel__download {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.analysis-panel__progress {
+  width: 100%;
+  height: 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  accent-color: var(--accent);
+  appearance: none;
+}
+.analysis-panel__progress::-webkit-progress-bar {
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+}
+.analysis-panel__progress::-webkit-progress-value {
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+}
+
+.analysis-panel__scene {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+.analysis-panel__scene-item {
+  display: contents;
+}
+.analysis-panel__scene dt {
+  color: var(--text-muted);
+}
+.analysis-panel__scene dd {
+  margin: 0;
+  color: var(--text);
+}
+
+.analysis-panel__objects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.analysis-panel__object {
+  height: 24px;
+  gap: 6px;
+  padding: 0 8px;
+}
+.analysis-panel__object-label {
+  color: var(--text-strong);
+}
+.analysis-panel__object-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.analysis-panel__text {
+  font-size: 12px;
+}
+.analysis-panel__text summary {
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.analysis-panel__text ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--text);
+  user-select: text;
+}
+
+.analysis-panel__footer {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+/* ---------- History row thumbnail ---------- */
+
+.clip-thumbnail {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 32px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0; /* no radius on images */
+  background: var(--bg-sunken);
+}
+
+.clip-thumbnail__image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 0;
+}
+
+/* ---------- Settings: analysis model row ---------- */
+
+.model-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-status__text {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}

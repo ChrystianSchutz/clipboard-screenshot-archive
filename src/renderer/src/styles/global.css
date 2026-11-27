@@ -1,0 +1,469 @@
+/*
+ * Clipboard & Screenshot Archive design tokens, modelled on VS Code's Dark Modern / Light Modern.
+ *
+ * Theme: dark is the default; `<html data-theme="light">` switches to light. The renderer sets the
+ * attribute from Settings → Appearance (System / Dark / Light; System follows `prefers-color-scheme`),
+ * see theme/apply-theme.ts. The main process also sets `nativeTheme.themeSource` for native parts
+ * (window background, title bar buttons, popups), but `prefers-color-scheme` is not relied on for
+ * an explicit choice: it does not reach windows that have never been shown.
+ *
+ * Accent: the renderer sets `--accent-{dark,light}`, `--accent-hover-*`, `--accent-fg-*` and
+ * `--on-accent-*` on <html> from the chosen colour (see src/shared/theme.ts, which guarantees the
+ * contrast); each theme block picks its set. The fallbacks are VS Code blue, so the UI is complete
+ * before settings load.
+ *
+ * The --bg / --bg-chrome / --bg-raised values are mirrored in src/shared/theme.ts (SURFACES) for
+ * the native window colours; a unit test keeps the two in sync.
+ */
+:root {
+  color-scheme: dark;
+
+  --font-ui:
+    -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', system-ui, Ubuntu, sans-serif;
+  --font-mono: 'Cascadia Code', 'Cascadia Mono', Consolas, 'SF Mono', Menlo, monospace;
+
+  /* Surfaces: editor, side bar / title bar / status bar, widgets and cards. */
+  --bg: #1f1f1f;
+  --bg-chrome: #181818;
+  --bg-raised: #252526;
+  --bg-sunken: #181818;
+  --bg-input: #313131;
+  --bg-hover: #2a2d2e;
+  --bg-inactive: #37373d;
+  --border: #2b2b2b;
+  --border-strong: #3c3c3c;
+  --border-input: #3c3c3c;
+
+  --text: #cccccc;
+  --text-strong: #d3d3d3;
+  --text-muted: #9d9d9d;
+  --text-faint: #8b8b8b;
+
+  --button-bg: #313131;
+  --button-bg-hover: #3c3c3c;
+  --button-border: rgb(255 255 255 / 7%);
+  --toolbar-hover: rgb(90 93 94 / 31%);
+  --scrollbar: rgb(121 121 121 / 40%);
+  --scrollbar-hover: rgb(100 100 100 / 70%);
+
+  --accent: var(--accent-dark, #0078d4);
+  --accent-hover: var(--accent-hover-dark, #006abb);
+  --accent-fg: var(--accent-fg-dark, #008df9);
+  --on-accent: var(--on-accent-dark, #ffffff);
+  /* Selected list row: VS Code's #04395e, derived from the accent so it follows the user's colour. */
+  --bg-active: color-mix(in srgb, var(--accent) 32%, var(--bg-chrome));
+
+  --added: #3fb950;
+  --removed: #f85149;
+  --changed: #d29922;
+
+  /* Categorical (content kind): validated with the dataviz palette checker on #181818/#1f1f1f/#252526. */
+  --kind-json: #338ced;
+  --kind-url: #e76624;
+  --kind-code: #00a888;
+  --kind-text: #9887ef;
+  --kind-image: #d4a72c;
+
+  --mark-bg: rgb(234 92 0 / 33%);
+  --shadow: 0 2px 8px rgb(0 0 0 / 36%);
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23cccccc' stroke-width='1.3'/%3E%3C/svg%3E");
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #ffffff;
+  --bg-chrome: #f8f8f8;
+  --bg-raised: #f8f8f8;
+  --bg-sunken: #ececec;
+  --bg-input: #ffffff;
+  --bg-hover: #f2f2f2;
+  --bg-inactive: #e4e6f1;
+  --border: #e5e5e5;
+  --border-strong: #cecece;
+  --border-input: #cecece;
+
+  --text: #3b3b3b;
+  --text-strong: #1f1f1f;
+  --text-muted: #616161;
+  --text-faint: #6e6e6e;
+
+  --button-bg: #e5e5e5;
+  --button-bg-hover: #cccccc;
+  --button-border: rgb(0 0 0 / 10%);
+  --toolbar-hover: rgb(184 184 184 / 31%);
+  --scrollbar: rgb(100 100 100 / 40%);
+  --scrollbar-hover: rgb(100 100 100 / 70%);
+
+  --accent: var(--accent-light, #005fb8);
+  --accent-hover: var(--accent-hover-light, #0054a2);
+  --accent-fg: var(--accent-fg-light, #005fb8);
+  --on-accent: var(--on-accent-light, #ffffff);
+  --bg-active: color-mix(in srgb, var(--accent) 14%, var(--bg));
+
+  --added: #1a7f37;
+  --removed: #cf222e;
+  --changed: #9a6700;
+
+  /* Validated on #ffffff/#f8f8f8: url and code are a shade deeper than in dark to keep 3:1. */
+  --kind-json: #257de0;
+  --kind-url: #d9601c;
+  --kind-code: #00997a;
+  --kind-text: #6a4ce2;
+  --kind-image: #9a6700;
+
+  --mark-bg: rgb(234 92 0 / 22%);
+  --shadow: 0 2px 8px rgb(0 0 0 / 16%);
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23616161' stroke-width='1.3'/%3E%3C/svg%3E");
+}
+
+:root {
+  /* Derived tokens: defined once, they follow whichever theme block above is active. */
+  --accent-soft: color-mix(in srgb, var(--accent) 22%, transparent);
+  --focus: var(--accent);
+  /* Older names, kept so feature CSS written against them keeps working. */
+  --accent-strong: var(--accent-fg);
+  --accent-text: var(--on-accent);
+
+  --added-soft: color-mix(in srgb, var(--added) 15%, transparent);
+  --added-strong: color-mix(in srgb, var(--added) 35%, transparent);
+  --removed-soft: color-mix(in srgb, var(--removed) 14%, transparent);
+  --removed-strong: color-mix(in srgb, var(--removed) 34%, transparent);
+  --changed-soft: color-mix(in srgb, var(--changed) 16%, transparent);
+
+  /* Small radii, VS Code style: badges and bars 2px, controls 3px, cards 8px. */
+  --radius-sm: 2px;
+  --radius: 3px;
+  --radius-lg: 8px;
+  --row-height: 52px;
+
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+img {
+  border-radius: 0;
+}
+
+:focus-visible {
+  outline: 1px solid var(--focus);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+::placeholder {
+  color: var(--text-faint);
+  opacity: 1;
+}
+
+/* VS Code scrollbars: square, translucent, no track. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover);
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+mark {
+  background: var(--mark-bg);
+  color: inherit;
+  border-radius: 1px;
+  box-shadow: 0 0 0 1px var(--mark-bg);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---------- Primitives ---------- */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--button-border);
+  border-radius: var(--radius);
+  background: var(--button-bg);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1;
+}
+.button:hover {
+  background: var(--button-bg-hover);
+}
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.button svg {
+  flex: none;
+}
+.button--primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--on-accent);
+}
+.button--primary:hover {
+  background: var(--accent-hover);
+}
+.button--danger:hover {
+  color: var(--removed);
+}
+.button--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+}
+.button--ghost:hover {
+  background: var(--toolbar-hover);
+  color: var(--text);
+}
+.button--icon {
+  width: 26px;
+  padding: 0;
+  justify-content: center;
+}
+.button[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text-strong);
+}
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--border-strong);
+  border-bottom-color: color-mix(in srgb, var(--border-strong) 60%, var(--text-faint));
+  border-radius: var(--radius);
+  font-size: 11px;
+  font-family: var(--font-ui);
+  line-height: 1;
+  color: var(--text);
+  background: color-mix(in srgb, var(--text-faint) 14%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--border-strong) 70%, transparent);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: uppercase;
+  /* Mixed toward the text ink so badge labels stay readable on both surfaces. */
+  color: color-mix(in srgb, var(--badge-color, var(--text-muted)) 70%, var(--text-strong));
+  background: color-mix(in srgb, var(--badge-color, var(--text-muted)) 16%, transparent);
+}
+.badge--json {
+  --badge-color: var(--kind-json);
+}
+.badge--url {
+  --badge-color: var(--kind-url);
+}
+.badge--code {
+  --badge-color: var(--kind-code);
+}
+.badge--text {
+  --badge-color: var(--kind-text);
+}
+.badge--image {
+  --badge-color: var(--kind-image);
+}
+
+input[type='text'],
+input[type='search'],
+input:not([type]),
+.input {
+  border-radius: var(--radius);
+}
+
+.select {
+  height: 26px;
+  padding: 0 26px 0 8px;
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius);
+  background: var(--bg-input) var(--select-chevron) no-repeat right 5px center / 16px 16px;
+  color: var(--text);
+  cursor: pointer;
+  appearance: none;
+}
+.select:hover {
+  border-color: color-mix(in srgb, var(--border-input) 50%, var(--text-faint));
+}
+.select:focus-visible {
+  outline: 1px solid var(--focus);
+  outline-offset: -1px;
+  border-color: var(--focus);
+}
+.select option {
+  background: var(--bg-input);
+  color: var(--text);
+}
+
+.segmented {
+  display: inline-flex;
+  gap: 1px;
+  padding: 1px;
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+}
+.segmented button {
+  height: 22px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.segmented button:hover {
+  color: var(--text);
+  background: var(--toolbar-hover);
+}
+.segmented button[aria-pressed='true'] {
+  background: var(--accent-soft);
+  color: var(--text-strong);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Switch: squared off to match the small-radius language (no pill shapes). */
+.toggle {
+  position: relative;
+  width: 30px;
+  height: 16px;
+  flex: none;
+  padding: 0;
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  cursor: pointer;
+  transition:
+    background 120ms,
+    border-color 120ms;
+}
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 1px;
+  background: var(--text-muted);
+  transition:
+    transform 120ms,
+    background 120ms;
+}
+.toggle[aria-checked='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.toggle[aria-checked='true']::after {
+  transform: translateX(14px);
+  background: var(--on-accent);
+}
+.toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.empty h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.empty p {
+  margin: 0;
+  max-width: 360px;
+  line-height: 1.6;
+}
+
+.crash {
+  display: grid;
+  place-content: center;
+  gap: 10px;
+  height: 100%;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

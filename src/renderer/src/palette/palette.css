@@ -1,0 +1,119 @@
+/* The frameless launcher window. The OS draws the window corners, so the frame itself is square. */
+.palette {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  border: 1px solid var(--border-strong);
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* Title bar, VS Code style: side-bar colour, panel-style tabs with an accent underline. */
+.titlebar {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  height: 36px;
+  padding: 0 4px 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-chrome);
+  app-region: drag;
+  user-select: none;
+}
+.titlebar button,
+.titlebar nav {
+  app-region: no-drag;
+}
+
+.titlebar__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.titlebar__brand img {
+  display: block;
+}
+.titlebar__drag {
+  flex: 1;
+}
+.titlebar__close {
+  align-self: center;
+}
+
+.tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+.tabs__tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.tabs__tab:hover {
+  color: var(--text-strong);
+}
+.tabs__tab[aria-selected='true'] {
+  color: var(--text-strong);
+}
+.tabs__tab[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 0 0.5px var(--accent);
+}
+.tabs__tab:focus-visible {
+  outline-offset: -3px;
+}
+
+.palette__content {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.toast-region {
+  position: absolute;
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow);
+  color: var(--text-strong);
+  font-size: 12px;
+  white-space: nowrap;
+  animation: toast-in 160ms ease-out;
+}
+.toast svg {
+  color: var(--added);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}

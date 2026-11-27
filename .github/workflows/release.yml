@@ -1,0 +1,108 @@
+name: Release
+
+# Push a tag like v0.2.0 (it must match "version" in package.json). Each OS builds its installer,
+# then one job attaches them to a draft GitHub Release. Review the draft and publish it by hand.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: --win
+          - os: macos-latest
+            target: --mac
+          - os: ubuntu-latest
+            target: --linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Check that the tag matches package.json
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${version}"
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm run build
+      # Unsigned: no certificates are configured. Turning off identity discovery stops
+      # electron-builder from picking up a random keychain identity on the macOS runner.
+      - name: Package (unsigned)
+        run: npx electron-builder ${{ matrix.target }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer-${{ runner.os }}
+          path: |
+            release/*/*.exe
+            release/*/*.dmg
+            release/*/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Draft GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: installer-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat > notes.md <<'EOF'
+          ## Downloads
+
+          | OS | File |
+          | --- | --- |
+          | Windows 10/11 (x64) | `Clipboard-Screenshot-Archive-Setup-<version>.exe` |
+          | macOS | `Clipboard-Screenshot-Archive-<version>-<arch>.dmg` (the file name shows the CPU architecture) |
+          | Linux | `Clipboard-Screenshot-Archive-<version>-<arch>.AppImage` |
+
+          `SHA256SUMS.txt` lists the checksum of every file.
+
+          ## These builds are unsigned
+
+          The installers are not code-signed or notarized, so your OS will warn you the first time:
+
+          - **Windows:** SmartScreen shows "Windows protected your PC". Click **More info**, then **Run anyway**.
+          - **macOS:** Gatekeeper refuses to open the app. Open **System Settings → Privacy & Security** and click **Open Anyway**.
+          - **Linux:** make the AppImage executable (`chmod +x`), then run it.
+
+          If you prefer not to run unsigned binaries, build from source: see the README.
+          EOF
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --title "$TAG" \
+            --notes-file notes.md

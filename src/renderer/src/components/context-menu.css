@@ -1,0 +1,70 @@
+/* Right-click menu, VS Code style: raised surface, 1px border, small radius, accent on the focused row. */
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: 13px;
+  user-select: none;
+}
+
+.context-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.context-menu__item:focus {
+  outline: none;
+}
+.context-menu__item:focus,
+.context-menu__item:focus-visible {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.context-menu__label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-menu__hint {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.context-menu__item:focus .context-menu__hint {
+  color: inherit;
+  opacity: 0.85;
+}
+
+.context-menu__item--danger {
+  color: var(--removed);
+}
+.context-menu__item--danger:focus,
+.context-menu__item--danger:focus-visible {
+  background: color-mix(in srgb, var(--removed) 85%, black);
+  color: #ffffff;
+}
+
+.context-menu__separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border-strong);
+}

@@ -1,0 +1,70 @@
+# electron-builder configuration: https://www.electron.build/configuration
+appId: io.github.chrystianschutz.clipboard-screenshot-archive
+productName: 'Clipboard & Screenshot Archive'
+copyright: Copyright © 2026 Chrystian Schutz
+
+directories:
+  output: release/${version}
+  buildResources: build
+
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+
+# Packaged into app.asar; the tray icon is imported with `?asset`, so it ships via `out/`.
+asar: true
+# koffi loads a native .node binary, which cannot be dlopen'ed from inside an asar archive.
+# tesseract.js starts a worker_threads script by path and loads its WASM core from disk.
+asarUnpack:
+  - node_modules/koffi/**
+  - node_modules/@koromix/**
+  - node_modules/tesseract.js/**
+  - node_modules/tesseract.js-core/**
+
+# Read by the OCR and analysis utility processes from process.resourcesPath (see
+# images/screenshot-feature.ts). The Mirage weights are not shipped: they are downloaded on request.
+extraResources:
+  - from: resources/ocr
+    to: ocr
+  - from: resources/analysis
+    to: analysis
+
+# Electron Fuses flip security-relevant features off in the binary itself, at package time.
+# https://www.electronjs.org/docs/latest/tutorial/fuses
+electronFuses:
+  runAsNode: false # ELECTRON_RUN_AS_NODE cannot turn the app into a generic Node runtime
+  enableNodeOptionsEnvironmentVariable: false # NODE_OPTIONS cannot inject code
+  enableNodeCliInspectArguments: false # no --inspect debugger attach in production
+  enableEmbeddedAsarIntegrityValidation: true # a tampered app.asar refuses to load
+  onlyLoadAppFromAsar: true # no loose app/ folder next to the binary
+  enableCookieEncryption: true
+  grantFileProtocolExtraPrivileges: false
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.png
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: false
+  shortcutName: 'Clipboard & Screenshot Archive'
+  artifactName: Clipboard-Screenshot-Archive-Setup-${version}.${ext}
+
+mac:
+  target: dmg
+  category: public.app-category.developer-tools
+  icon: build/icon.png
+  artifactName: Clipboard-Screenshot-Archive-${version}-${arch}.${ext}
+  extendInfo:
+    LSUIElement: true # tray-only app, no Dock icon
+
+linux:
+  target: AppImage
+  category: Development
+  icon: build/icon.png
+  artifactName: Clipboard-Screenshot-Archive-${version}-${arch}.${ext}

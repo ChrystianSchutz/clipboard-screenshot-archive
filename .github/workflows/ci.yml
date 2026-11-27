@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck, lint, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run test:coverage
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+
+  e2e:
+    name: E2E (${{ matrix.os }})
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: E2E (Windows)
+        if: runner.os == 'Windows'
+        run: npm run test:e2e
+      - name: E2E (Linux, virtual display)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npm run test:e2e
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-${{ matrix.os }}
+          path: test-results/
+          retention-days: 7
+
+  package:
+    name: Package and smoke-test (Windows)
+    needs: check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run package
+      # Launches the packaged EXE (hidden, temp profile, CLIPBOARD_ARCHIVE_SMOKE=1). Checks that it
+      # starts, koffi loads, the clipboard listener registers, the UI renders from app.asar and
+      # the preload + IPC bridge works.
+      # It does not read or write the clipboard; capture behaviour is covered by the E2E job.
+      - name: Smoke-test the packaged app
+        run: node scripts/smoke-packaged.mjs
+      # Real OS copies on the runner's clipboard (CI only; the script refuses without CI=true):
+      # an ordinary copy must be recorded, a CanIncludeInClipboardHistory=0 copy must not.
+      - name: Smoke-test OS clipboard capture (ordinary and private copy)
+        run: node scripts/smoke-packaged.mjs --capture
