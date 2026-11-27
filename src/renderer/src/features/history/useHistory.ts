@@ -196,7 +196,7 @@ export class HistoryLoader {
   private readonly show: (patch: Partial<Shown>) => void;
   private readonly now: () => number;
 
-  constructor(show: (patch: Partial<Shown>) => void, now: () => number = Date.now) {
+  constructor(show: (patch: Partial<Shown>) => void, now: () => number = () => performance.now()) {
     this.show = show;
     this.now = now;
   }
