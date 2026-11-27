@@ -9,6 +9,10 @@ dist/
 # Packaged installers (electron-builder writes to release/<version>/)
 release*/
 
+# Landing page build output (node site/build.mjs)
+site/_dist/
+_site/
+
 # Test and coverage reports
 coverage/
 test-results/

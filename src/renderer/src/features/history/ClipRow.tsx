@@ -6,16 +6,30 @@ import { CategoryChips } from '../../components/CategoryChips';
 import { Highlight } from '../../components/Highlight';
 import { Icon } from '../../components/Icon';
 import { KindBadge } from '../../components/primitives';
+import { isMacPlatform, pointerIntent, type PointerIntent } from '../../lib/selection';
 import { ClipThumbnail } from '../ocr/ClipThumbnail';
 import type { HighlightQuery } from './highlight';
+
+const IS_MAC = isMacPlatform();
+
+/**
+ * The selection intent of a mouse press on a row or tile: plain, Ctrl/Cmd, Shift or both. `null`
+ * for presses that leave the selection alone (other buttons, and a macOS Ctrl+click, which is a
+ * right-click): the context menu handler decides those.
+ */
+export function pressIntent(event: MouseEvent): PointerIntent | null {
+  return event.button === 0 ? pointerIntent(event, IS_MAC) : null;
+}
 
 interface ClipRowProps {
   readonly clip: ClipSummary;
   readonly selected: boolean;
+  /** Has keyboard focus within the list (the focus ring); usually also selected. */
+  readonly focused: boolean;
   readonly marked: boolean;
   readonly now: number;
   readonly query: HighlightQuery;
-  readonly onSelect: (id: number) => void;
+  readonly onSelect: (id: number, intent: PointerIntent) => void;
   readonly onActivate: (id: number) => void;
   /** Right-click: opens the clip menu. */
   readonly onContextMenu: (clip: ClipSummary, event: MouseEvent) => void;
@@ -24,6 +38,7 @@ interface ClipRowProps {
 export const ClipRow = memo(function ClipRow({
   clip,
   selected,
+  focused,
   marked,
   now,
   query,
@@ -40,8 +55,11 @@ export const ClipRow = memo(function ClipRow({
       id={`clip-${clip.id}`}
       role="option"
       aria-selected={selected}
-      className={`clip-row ${selected ? 'clip-row--selected' : ''} ${marked ? 'clip-row--marked' : ''}`}
-      onMouseDown={() => onSelect(clip.id)}
+      className={`clip-row ${selected ? 'clip-row--selected' : ''} ${focused ? 'clip-row--focused' : ''} ${marked ? 'clip-row--marked' : ''}`}
+      onMouseDown={(event) => {
+        const intent = pressIntent(event);
+        if (intent !== null) onSelect(clip.id, intent);
+      }}
       onDoubleClick={() => onActivate(clip.id)}
       onContextMenu={(event) => onContextMenu(clip, event)}
     >

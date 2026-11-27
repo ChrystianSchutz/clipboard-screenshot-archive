@@ -1,4 +1,5 @@
 /** Pure helpers for the right-click menu: the clip menu's items, placement and keyboard moves. */
+import { pluralize } from '@shared/text';
 import type { ClipKind } from '@shared/types';
 
 export interface MenuItem {
@@ -8,6 +9,10 @@ export interface MenuItem {
   readonly hint?: string;
   /** Destructive: drawn in the danger colour. */
   readonly danger?: boolean;
+  /** Shown but not available; `title` says why. Still focusable, so the reason can be read. */
+  readonly disabled?: boolean;
+  /** Tooltip (and accessible description) of the item. */
+  readonly title?: string;
 }
 
 export type MenuEntry = MenuItem | { readonly separator: true };
@@ -114,4 +119,94 @@ export function clipMenuItems(context: ClipMenuContext): MenuEntry[] {
 export function compareStateFor(clipId: number, markedId: number | null): CompareState {
   if (markedId === null) return 'mark';
   return markedId === clipId ? 'unmark' : 'compare';
+}
+
+/** What the items of a multi-selection are called: "3 clips", "3 screenshots". */
+export type SelectionNoun = 'clip' | 'screenshot';
+
+/** A multi-selection (2 or more items), as the menu and the summary pane describe it. */
+export interface SelectionMenuContext {
+  readonly noun: SelectionNoun;
+  readonly count: number;
+  /** Selected clips that have text Copy can join (every kind but images). */
+  readonly textCount: number;
+  /** Every selected item is pinned: the pin action unpins. */
+  readonly allPinned: boolean;
+  /** Offer "Copy text": the joined text read from the selected screenshots (the gallery). */
+  readonly copyText: boolean;
+  /**
+   * "Compare selected": `null` where it is not offered (the gallery), otherwise whether the
+   * selection is exactly two text clips.
+   */
+  readonly compare: boolean | null;
+}
+
+export interface SelectionLabels {
+  readonly title: string;
+  readonly copy: string;
+  /** Why Copy is unavailable (nothing to join), or what it leaves out; `null` when neither. */
+  readonly copyNote: string | null;
+  readonly copyDisabled: boolean;
+  readonly copyText: string;
+  readonly pin: string;
+  readonly compare: string;
+  /** Why Compare is unavailable; `null` when it is available or not offered. */
+  readonly compareNote: string | null;
+  readonly delete: string;
+  readonly confirmDelete: string;
+}
+
+/** The labels of every action on a multi-selection, with counts: "Copy 3 clips", "Delete 3 clips". */
+export function selectionLabels(context: SelectionMenuContext): SelectionLabels {
+  const { noun, count, textCount } = context;
+  const items = pluralize(count, noun);
+  const images = count - textCount;
+  const copyNote =
+    textCount === 0
+      ? noun === 'screenshot'
+        ? 'Several images cannot be copied at once. Use Copy text.'
+        : 'Images cannot be joined into text. Select text clips.'
+      : images > 0
+        ? `${pluralize(images, 'image')} will be skipped`
+        : null;
+  return {
+    title: `${items} selected`,
+    copy: textCount === 0 ? 'Copy' : `Copy ${pluralize(textCount, noun)}`,
+    copyNote,
+    copyDisabled: textCount === 0,
+    copyText: `Copy text of ${items}`,
+    pin: `${context.allPinned ? 'Unpin' : 'Pin'} ${items}`,
+    compare: 'Compare selected',
+    compareNote: context.compare === false ? 'Select exactly two text clips to compare' : null,
+    delete: `Delete ${items}`,
+    confirmDelete: `Delete ${items}?`,
+  };
+}
+
+/**
+ * The menu for a right-click inside a multi-selection: the same actions as for one clip, on every
+ * selected item, with counts in the labels. Compare appears only when it can run (exactly two
+ * text clips); Copy of images only is shown disabled, with the reason as its tooltip.
+ */
+export function selectionMenuItems(context: SelectionMenuContext): MenuEntry[] {
+  const labels = selectionLabels(context);
+  const copy: MenuItem = labels.copyDisabled
+    ? { id: 'copy', label: labels.copy, disabled: true, title: labels.copyNote ?? '' }
+    : {
+        id: 'copy',
+        label: labels.copy,
+        hint: 'Enter',
+        ...(labels.copyNote ? { title: labels.copyNote } : {}),
+      };
+  const entries: MenuEntry[] = [copy];
+  if (context.copyText) entries.push({ id: 'copy-text', label: labels.copyText });
+  entries.push({ id: 'pin', label: labels.pin, hint: 'Ctrl+P' });
+  if (context.compare === true) {
+    entries.push({ id: 'compare', label: labels.compare, hint: 'Ctrl+D' });
+  }
+  entries.push(
+    { separator: true },
+    { id: 'delete', label: labels.delete, hint: 'Del', danger: true },
+  );
+  return entries;
 }

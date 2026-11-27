@@ -30,12 +30,15 @@ export interface ScreenshotsDeps {
     cancelAnalysis(): string[];
     /** Drops the analyses only the capture asked for, keeps explicit ones (see `ImageCaptureService`). */
     cancelAutomaticAnalysis(): string[];
+    /** Drops all queued or running work for these images (see `ImageCaptureService`). */
+    withdrawImages(hashes: ReadonlySet<string>): { text: string[]; analysis: string[] };
   };
   readonly repository: Pick<
     ImageRepository,
     | 'record'
     | 'details'
     | 'hashOf'
+    | 'hashesOf'
     | 'hasImage'
     | 'pendingText'
     | 'pendingAnalysis'
@@ -325,6 +328,24 @@ export class Screenshots {
     this.recheckModel().catch((cause: unknown) => {
       this.deps.onError(cause instanceof Error ? cause : new Error(String(cause)), 'model check');
     });
+  }
+
+  /** The image hashes of these clips (text clips have none), read before deleting them. */
+  imageHashesOf(clipIds: readonly number[]): string[] {
+    return this.deps.repository.hashesOf(clipIds);
+  }
+
+  /**
+   * Clips were deleted: the text recognition and analysis still queued (or running) for their
+   * images are withdrawn, unless another clip still shows the same image. `hashes` are the images
+   * of the deleted clips, read before the delete.
+   */
+  forgetImages(hashes: Iterable<string>): void {
+    const gone = new Set<string>();
+    for (const hash of hashes) if (!this.deps.repository.hasImage(hash)) gone.add(hash);
+    if (gone.size === 0) return;
+    for (const hash of gone) this.textAttempts.delete(hash);
+    this.deps.capture.withdrawImages(gone);
   }
 
   /**

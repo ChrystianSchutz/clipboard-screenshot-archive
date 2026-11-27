@@ -7,6 +7,7 @@ import type { OcrResult } from '@shared/ocr';
 import type { AnalysisModelState } from '@shared/screenshots';
 import type { ClipSource } from '@shared/types';
 import type { AnalysisRequest } from '../analysis/remote-image-analyzer';
+import { historyMutationHandlers } from '../app/history-mutations';
 import { shutDown } from '../app/shutdown';
 import { CaptureGate } from '../clipboard/capture-gate';
 import { CaptureService } from '../clipboard/capture-service';
@@ -413,6 +414,62 @@ describe('captures racing settings changes and shutdown', () => {
 
     expect(screenshots.details(first)?.analysis.state).toBe('done');
     expect(screenshots.details(second)?.analysis.state).toBe('done');
+  });
+
+  it('withdraws the queued and running work of deleted screenshots, one at a time or in a batch', async () => {
+    await screenshots.start();
+    const handlers = historyMutationHandlers({
+      repository: clips,
+      images: {
+        hashesOf: (ids) => screenshots.imageHashesOf(ids),
+        forget: (hashes) => screenshots.forgetImages(hashes),
+      },
+      scheduleSweep: () => undefined,
+      announce: () => undefined,
+    });
+    const busyText = deferred<OcrResult>();
+    recognize.mockImplementationOnce(() => busyText.promise);
+    const busyAnalysis = deferred<ImageAnalysis>();
+    analyze.mockImplementationOnce(() => busyAnalysis.promise);
+    const images = [21, 22, 23, 24].map((seed) => new FakeImage(800, 600, seed));
+    const ids: number[] = [];
+    for (const image of images) {
+      clipboardImage = image;
+      ids.push(await recordedId(copy()));
+    }
+    const [running, waiting, single, kept] = ids as [number, number, number, number];
+    const [runningHash, waitingHash, singleHash, keptHash] = images.map(hashOf) as [
+      string,
+      string,
+      string,
+      string,
+    ];
+    await vi.waitFor(() => expect(recognize).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(analyze).toHaveBeenCalledTimes(1));
+    expect(ocrQueue.size).toBe(4);
+
+    expect(handlers['history:delete-many']([running, waiting], { role: 'palette' })).toBe(2);
+    expect(handlers['history:delete'](single, { role: 'palette' })).toBe(1);
+
+    // Gone from both real queues at once: the waiting jobs dropped, the running ones disowned.
+    for (const hash of [runningHash, waitingHash, singleHash]) {
+      expect(ocrQueue.has(hash)).toBe(false);
+      expect(analysisQueue.has(hash)).toBe(false);
+    }
+    expect(ocrQueue.has(keptHash)).toBe(true);
+    busyText.resolve(ocrResult());
+    busyAnalysis.resolve(imageAnalysis());
+    await settle();
+
+    // Only the surviving screenshot was worked on after the delete.
+    expect(recognize).toHaveBeenCalledTimes(2);
+    expect(analyze).toHaveBeenCalledTimes(2);
+    expect(screenshots.details(kept)).toMatchObject({
+      text: { state: 'done' },
+      analysis: { state: 'done' },
+    });
+    expect(ocrQueue.size).toBe(0);
+    expect(analysisQueue.size).toBe(0);
   });
 
   describe("through the app's capture gate and shutdown order", () => {

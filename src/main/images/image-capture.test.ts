@@ -109,6 +109,7 @@ describe('ImageCaptureService', () => {
   let ocr: {
     enqueue: ReturnType<typeof vi.fn<(job: KeyedJob<OcrImage>) => boolean>>;
     clear: ReturnType<typeof vi.fn<() => string[]>>;
+    withdraw: ReturnType<typeof vi.fn<(match: (key: string) => boolean) => string[]>>;
   };
   let analysis: {
     enqueue: ReturnType<typeof vi.fn<(job: KeyedJob<AnalysisRequest>) => boolean>>;
@@ -151,7 +152,7 @@ describe('ImageCaptureService', () => {
     decoder = new FakePngDecoder();
     fs = new MemoryImageFs();
     store = new ImageStore(DIR, fs);
-    ocr = { enqueue: vi.fn(() => true), clear: vi.fn(() => []) };
+    ocr = { enqueue: vi.fn(() => true), clear: vi.fn(() => []), withdraw: vi.fn(() => []) };
     analysis = {
       enqueue: vi.fn(() => true),
       clear: vi.fn(() => []),

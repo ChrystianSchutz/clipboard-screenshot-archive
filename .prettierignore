@@ -7,3 +7,5 @@ package-lock.json
 resources
 out-*
 release*
+site/_dist
+_site

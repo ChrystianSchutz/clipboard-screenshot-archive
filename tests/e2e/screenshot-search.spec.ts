@@ -153,11 +153,13 @@ test.describe('history refresh', () => {
       await expect(rows).toHaveCount(expected);
     }
 
-    // Any change re-runs the query: the list keeps as many rows as were loaded (180, the new
-    // one on top), instead of collapsing to one budget-limited page of at most 128.
+    // Any change re-runs the query: the list keeps every row that was loaded, the new one on
+    // top (181), instead of collapsing to one budget-limited page of at most 128, or pushing the
+    // oldest loaded row out at the bottom.
     await clipboardArchive.copy('one more copy');
     await expect(rows.first()).toContainText('one more copy');
     await palette.waitForTimeout(300);
-    await expect(rows).toHaveCount(180);
+    await expect(rows).toHaveCount(181);
+    await expect(rows.last()).toContainText('entry 020');
   });
 });

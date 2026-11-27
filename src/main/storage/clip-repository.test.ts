@@ -851,6 +851,32 @@ describe('ClipRepository', () => {
       expect(repo.apps()).toEqual([]);
       expect(repo.stats().copiesToday).toBe(0);
     });
+
+    it('deletes a whole multi-selection, pinned clips included, and drops it from search', () => {
+      const keep = add('keep this needle');
+      const batch = [add('needle one'), add('needle two'), add('needle three')];
+      repo.setPinned(batch[1]!.id, true);
+
+      expect(repo.delete(ids(batch))).toBe(3);
+      expect(ids(repo.query({ text: 'needle' }).clips)).toEqual([keep.id]);
+      expect(repo.stats().totalClips).toBe(1);
+    });
+
+    it('runs in one transaction: when one row fails, no clip is deleted', () => {
+      const a = add('a');
+      const b = add('b');
+      const c = add('c');
+      // One row of the batch fails (as a full disk or a locked file would).
+      db.exec(`CREATE TRIGGER fail_delete BEFORE DELETE ON clips WHEN old.id = ${String(b.id)}
+               BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
+
+      expect(() => repo.delete([a.id, b.id, c.id])).toThrow(/disk full/);
+
+      expect(ids(repo.query({}).clips).sort()).toEqual([a.id, b.id, c.id].sort());
+      // The connection is usable afterwards: the transaction was rolled back, not left open.
+      db.exec('DROP TRIGGER fail_delete');
+      expect(repo.delete([a.id])).toBe(1);
+    });
   });
 
   describe('clear', () => {
@@ -885,6 +911,25 @@ describe('ClipRepository', () => {
 
     it('does nothing for an unknown id', () => {
       expect(() => repo.setPinned(999, true)).not.toThrow();
+    });
+  });
+
+  describe('setPinnedMany', () => {
+    it('pins and unpins several clips at once and counts the ones that exist', () => {
+      const a = add('a');
+      const b = add('b');
+      const c = add('c');
+      repo.setPinned(b.id, true);
+
+      expect(repo.setPinnedMany([a.id, b.id, 999], true)).toBe(2);
+      expect([a, b, c].map((clip) => repo.get(clip.id)?.pinned)).toEqual([true, true, false]);
+
+      expect(repo.setPinnedMany([a.id, b.id], false)).toBe(2);
+      expect(repo.query({ pinnedOnly: true }).clips).toEqual([]);
+    });
+
+    it('returns 0 for an empty list', () => {
+      expect(repo.setPinnedMany([], true)).toBe(0);
     });
   });
 

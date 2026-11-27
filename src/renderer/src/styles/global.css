@@ -246,9 +246,17 @@ mark {
 .button:hover {
   background: var(--button-bg-hover);
 }
-.button:disabled {
+.button:disabled,
+.button[aria-disabled='true'] {
   opacity: 0.5;
   cursor: default;
+}
+/* Unavailable but focusable (its title says why): no hover feedback. */
+.button[aria-disabled='true']:hover {
+  background: var(--button-bg);
+}
+.button--primary[aria-disabled='true']:hover {
+  background: var(--accent);
 }
 .button svg {
   flex: none;
@@ -263,6 +271,14 @@ mark {
 }
 .button--danger:hover {
   color: var(--removed);
+}
+.button--danger-solid {
+  background: var(--removed);
+  border-color: transparent;
+  color: #ffffff;
+}
+.button--danger-solid:hover {
+  background: color-mix(in srgb, var(--removed) 88%, #000000);
 }
 .button--ghost {
   background: transparent;

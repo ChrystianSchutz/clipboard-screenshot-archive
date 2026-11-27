@@ -32,7 +32,7 @@ test.describe('security', () => {
     const message = await clipboardArchive.palette.evaluate(async () => {
       const api = (
         window as unknown as {
-          clipboardArchive: { history: { remove(ids: unknown): Promise<number> } };
+          clipboardArchive: { history: { remove(id: unknown): Promise<number> } };
         }
       ).clipboardArchive;
       try {

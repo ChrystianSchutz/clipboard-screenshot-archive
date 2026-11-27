@@ -15,6 +15,8 @@ export default tseslint.config(
       'test-results/',
       'playwright-report/',
       'resources/',
+      'site/_dist/',
+      '_site/',
     ],
   },
   js.configs.recommended,
@@ -52,4 +54,14 @@ export default tseslint.config(
     rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
   },
   { files: ['**/*.js', '**/*.mjs'], ...tseslint.configs.disableTypeChecked },
+  {
+    // Landing page: build/preview scripts run in Node and print progress; page scripts run in the browser.
+    files: ['site/**/*.mjs'],
+    languageOptions: { globals: globals.node },
+    rules: { 'no-console': 'off' },
+  },
+  {
+    files: ['site/*.js'],
+    languageOptions: { globals: globals.browser },
+  },
 );

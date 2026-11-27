@@ -2,6 +2,7 @@ import type {
   AppInfo,
   Clip,
   CompareState,
+  CopyClipsResult,
   HistoryPage,
   HistoryQuery,
   HistoryStats,
@@ -28,9 +29,22 @@ export interface InvokeChannels {
   'history:regex-ranges': { args: [pattern: string, text: string]; result: RegexRangesResult };
   'history:apps': { args: []; result: string[] };
   'history:restore': { args: [id: number]; result: undefined };
-  'history:delete': { args: [ids: number[]]; result: number };
+  /** Deletes one clip; the result is how many were removed (0 when it was already gone). */
+  'history:delete': { args: [id: number]; result: number };
+  /**
+   * Deletes a multi-selection in one transaction: 1 to `MAX_BATCH_IDS` distinct ids. The result
+   * is how many were removed (ids that no longer exist are skipped).
+   */
+  'history:delete-many': { args: [ids: number[]]; result: number };
+  /**
+   * Copies the text clips among `ids` as one text, joined in the given order (images skipped),
+   * without recording it as a new clip. Same id rules as `history:delete-many`.
+   */
+  'history:copy-many': { args: [ids: number[]]; result: CopyClipsResult };
   'history:clear': { args: [options: { keepPinned: boolean }]; result: number };
   'history:set-pinned': { args: [id: number, pinned: boolean]; result: undefined };
+  /** Pins or unpins a multi-selection in one transaction; same id rules as `history:delete-many`. */
+  'history:set-pinned-many': { args: [ids: number[], pinned: boolean]; result: number };
   'stats:get': { args: []; result: HistoryStats };
   'settings:get': { args: []; result: Settings };
   'settings:update': { args: [patch: SettingsPatch]; result: SettingsUpdateResult };
@@ -42,7 +56,10 @@ export interface InvokeChannels {
   'diagnostics:report-error': { args: [report: ClientErrorReport]; result: undefined };
   /** Size, recognised text and analysis of an image clip; `null` when it is not one. */
   'screenshot:details': { args: [clipId: number]; result: ScreenshotDetails | null };
-  /** Puts text read from a screenshot on the clipboard (a line, or all of it). */
+  /**
+   * Puts text on the clipboard without recording it: a line or all text read from a screenshot,
+   * or the joined text of a multi-selection. Up to `MAX_COPY_TEXT_CHARS` characters.
+   */
   'screenshot:copy-text': { args: [text: string]; result: undefined };
   /** The "Analyze" button; `false` when analysis is off or the model is not downloaded. */
   'screenshot:analyze': { args: [clipId: number]; result: boolean };
@@ -104,9 +121,12 @@ export interface ClipboardArchiveApi {
     regexRanges(pattern: string, text: string): Promise<RegexRangesResult>;
     apps(): Promise<string[]>;
     restore(id: number): Promise<void>;
-    remove(ids: number[]): Promise<number>;
+    remove(id: number): Promise<number>;
+    removeMany(ids: number[]): Promise<number>;
+    copyMany(ids: number[]): Promise<CopyClipsResult>;
     clear(options: { keepPinned: boolean }): Promise<number>;
     setPinned(id: number, pinned: boolean): Promise<void>;
+    setPinnedMany(ids: number[], pinned: boolean): Promise<number>;
     onChanged(listener: () => void): Unsubscribe;
   };
   readonly stats: {

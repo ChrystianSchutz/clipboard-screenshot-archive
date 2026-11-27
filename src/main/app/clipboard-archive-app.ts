@@ -44,6 +44,8 @@ import { openDatabase } from '../storage/database';
 import { SettingsStore } from '../storage/settings-store';
 import { isAppDocumentUrl } from './app-document';
 import { APP_INDEX_URL, serveAppProtocol } from './app-protocol';
+import { copyClips } from './history-copy';
+import { historyMutationHandlers } from './history-mutations';
 import { MemoryLoginItem, applyLoginItem, electronLoginItem } from './login-item';
 import { installSecurityPolicies } from './security';
 import { shutDown } from './shutdown';
@@ -144,7 +146,7 @@ export class ClipboardArchiveApp {
       settings: () => settingsStore.get(),
       mainDir: this.options.mainDir,
       sandbox: sandbox?.io ?? null,
-      writeText: (text) => capture.writeWithoutRecording(text),
+      writeText: (text) => capture.writeComposedText(text),
       writeMarked: (write) => capture.writeMarked(write),
       broadcast: {
         updated: (clipId) => windows.broadcast('screenshot:updated', clipId),
@@ -327,23 +329,22 @@ export class ClipboardArchiveApp {
         repository.touch(id);
         windows.broadcast('history:changed', undefined);
       },
-      'history:delete': (ids) => {
-        const removed = repository.delete(ids);
-        if (removed > 0) {
-          screenshots.scheduleSweep();
-          windows.broadcast('history:changed', undefined);
-        }
-        return removed;
-      },
+      'history:copy-many': (ids) =>
+        copyClips({ repository, write: (text) => capture.writeComposedText(text) }, ids),
+      ...historyMutationHandlers({
+        repository,
+        images: {
+          hashesOf: (clipIds) => screenshots.imageHashesOf(clipIds),
+          forget: (hashes) => screenshots.forgetImages(hashes),
+        },
+        scheduleSweep: () => screenshots.scheduleSweep(),
+        announce: () => windows.broadcast('history:changed', undefined),
+      }),
       'history:clear': (options) => {
         const removed = repository.clear(options);
         screenshots.scheduleSweep();
         windows.broadcast('history:changed', undefined);
         return removed;
-      },
-      'history:set-pinned': (id, pinned) => {
-        repository.setPinned(id, pinned);
-        windows.broadcast('history:changed', undefined);
       },
       ...screenshotFeature.handlers,
       'stats:get': () => repository.stats(),

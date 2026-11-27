@@ -1,6 +1,7 @@
 import type { IpcMain, IpcMainInvokeEvent } from 'electron';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { InvokeChannel } from '@shared/ipc-contract';
+import { MAX_BATCH_IDS } from '@shared/types';
 import { IpcValidationError, registerIpcHandlers } from './register';
 import { ipcSchemas } from './schemas';
 import type { TrustedSender } from './sender-policy';
@@ -30,6 +31,9 @@ class FakeIpcMain implements Pick<IpcMain, 'handle' | 'removeHandler'> {
 }
 
 const CHANNELS = Object.keys(ipcSchemas) as InvokeChannel[];
+
+/** The ids 1..count. */
+const range = (count: number): number[] => Array.from({ length: count }, (_, index) => index + 1);
 
 function fakeEvent(url: string): IpcMainInvokeEvent {
   return { senderFrame: { url } } as unknown as IpcMainInvokeEvent;
@@ -149,7 +153,18 @@ describe('registerIpcHandlers', () => {
       ['history:apps', 'an unexpected extra argument', ['extra']],
       ['compare:open-clips', 'only one of two ids', [1]],
       ['history:set-pinned', 'a non-boolean flag', [1, 'yes']],
-      ['history:delete', 'ids that are not an array', [1]],
+      ['history:delete', 'an array instead of one id', [[1, 2]]],
+      ['history:delete-many', 'one id instead of an array', [1]],
+      ['history:delete-many', 'an empty list', [[]]],
+      ['history:delete-many', 'a duplicate id', [[1, 2, 1]]],
+      ['history:delete-many', 'a fractional id', [[1, 2.5]]],
+      ['history:delete-many', 'more ids than one batch takes', [range(MAX_BATCH_IDS + 1)]],
+      ['history:copy-many', 'an empty list', [[]]],
+      ['history:copy-many', 'a duplicate id', [[5, 5]]],
+      ['history:copy-many', 'more ids than one batch takes', [range(MAX_BATCH_IDS + 1)]],
+      ['history:set-pinned-many', 'a missing flag', [[1, 2]]],
+      ['history:set-pinned-many', 'a duplicate id', [[3, 3], true]],
+      ['history:set-pinned-many', 'an empty list', [[], false]],
       ['history:clear', 'an unknown option', [{ keepPinned: true, force: true }]],
       ['history:query', 'an unknown query key', [{ sql: 'DROP TABLE clips' }]],
       ['history:query', 'an unknown kind', [{ kind: 'video' }]],
@@ -169,6 +184,19 @@ describe('registerIpcHandlers', () => {
         new RegExp(`^Invalid arguments for ${channel}: `),
       );
       expect(handlers[channel]).not.toHaveBeenCalled();
+    });
+
+    it('accepts a batch of distinct ids up to the cap, and passes it on unchanged', () => {
+      const ids = range(MAX_BATCH_IDS);
+      ipcMain.invoke('history:delete-many', trustedEvent, ids);
+      ipcMain.invoke('history:set-pinned-many', trustedEvent, [4, 2], true);
+
+      expect(handlers['history:delete-many']).toHaveBeenCalledExactlyOnceWith(ids, PALETTE);
+      expect(handlers['history:set-pinned-many']).toHaveBeenCalledExactlyOnceWith(
+        [4, 2],
+        true,
+        PALETTE,
+      );
     });
 
     it('throws an IpcValidationError that is a real Error with its own name', () => {

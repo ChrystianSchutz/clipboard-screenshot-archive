@@ -52,7 +52,7 @@ export interface ScreenshotFeatureOptions {
     readImage(): Promise<Uint8Array | null>;
     writeImage(png: Uint8Array, marker?: string): Promise<void>;
   } | null;
-  /** Writes text to the clipboard without recording it (copying lines read from a screenshot). */
+  /** Writes composed text (lines read from a screenshot) without recording it (`writeComposedText`). */
   readonly writeText: (text: string) => Promise<void>;
   /** The app's single clipboard write chain, with write markers (`CaptureService.writeMarked`). */
   readonly writeMarked?: <T>(write: (marker?: string) => Promise<T>) => Promise<T>;

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { compactNumber, countLines, domainOf, firstLine, pluralize } from './text';
+import {
+  compactNumber,
+  countLines,
+  domainOf,
+  firstLine,
+  joinedLength,
+  joinTexts,
+  pluralize,
+} from './text';
 
 describe('countLines', () => {
   it('returns 0 for empty text', () => {
@@ -108,4 +116,17 @@ describe('domainOf', () => {
       expect(domainOf(url)).toBeNull();
     },
   );
+});
+
+describe('joinTexts and joinedLength', () => {
+  it('joins in order, one text per line', () => {
+    expect(joinTexts(['first', 'second\nline', 'third'])).toBe('first\nsecond\nline\nthird');
+    expect(joinTexts([])).toBe('');
+  });
+
+  it('measures the joined text without building it', () => {
+    for (const texts of [[], ['a'], ['ab', '', 'cde'], ['x'.repeat(10), 'y']]) {
+      expect(joinedLength(texts.map((text) => text.length))).toBe(joinTexts(texts).length);
+    }
+  });
 });

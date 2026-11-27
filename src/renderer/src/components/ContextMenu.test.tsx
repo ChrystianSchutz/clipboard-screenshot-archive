@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { clipMenuItems } from './context-menu';
+import { clipMenuItems, selectionMenuItems } from './context-menu';
 import { ContextMenu, type ContextMenuProps } from './ContextMenu';
 
 function renderMenu(overrides: Partial<ContextMenuProps> = {}) {
@@ -24,7 +24,7 @@ function renderMenu(overrides: Partial<ContextMenuProps> = {}) {
     ...view,
     props,
     onParentKeyDown,
-    menu: screen.getByRole('menu', { name: 'Clip actions' }),
+    menu: screen.getByRole('menu', { name: props.label }),
   };
 }
 
@@ -119,5 +119,35 @@ describe('ContextMenu', () => {
     const { menu } = renderMenu({ position: { x: window.innerWidth - 10, y: window.innerHeight } });
     expect(menu.style.left).toBe(`${String(window.innerWidth - 204)}px`);
     expect(menu.style.top).toBe(`${String(window.innerHeight - 154)}px`);
+  });
+});
+
+describe('ContextMenu with a disabled item', () => {
+  const entries = selectionMenuItems({
+    noun: 'screenshot',
+    count: 2,
+    textCount: 0,
+    allPinned: false,
+    copyText: true,
+    compare: null,
+  });
+
+  it('shows it, keeps it reachable, and says why it is unavailable', () => {
+    renderMenu({ entries, label: 'Actions for 2 screenshots' });
+    const copy = item('Copy');
+    expect(copy.getAttribute('aria-disabled')).toBe('true');
+    expect(copy.title).toBe('Several images cannot be copied at once. Use Copy text.');
+    // Still the first stop for the arrow keys, so the reason can be read.
+    expect(document.activeElement).toBe(copy);
+  });
+
+  it('ignores clicks, Enter and Space on it, but runs the other items', () => {
+    const { props, menu } = renderMenu({ entries, label: 'Actions for 2 screenshots' });
+    fireEvent.click(item('Copy'));
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    fireEvent.keyDown(menu, { key: ' ' });
+    expect(props.onSelect).not.toHaveBeenCalled();
+    fireEvent.click(item('Copy text of 2 screenshots'));
+    expect(props.onSelect).toHaveBeenCalledWith('copy-text');
   });
 });

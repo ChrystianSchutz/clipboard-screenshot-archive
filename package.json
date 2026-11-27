@@ -2,7 +2,7 @@
   "name": "clipboard-screenshot-archive",
   "productName": "Clipboard & Screenshot Archive",
   "version": "0.1.0",
-  "description": "Local-first clipboard and screenshot history: every copy keeps the app and page it came from, screenshots get offline OCR so their text is searchable, and one shortcut diffs two JSON payloads regardless of key order.",
+  "description": "Local-first clipboard & screenshot history for Windows, macOS and Linux. Every copy is saved with the app and website it came from, and offline OCR makes the text in your screenshots searchable and copyable.",
   "main": "./out/main/index.js",
   "license": "MIT",
   "author": "Chrystian Schutz (https://github.com/ChrystianSchutz)",

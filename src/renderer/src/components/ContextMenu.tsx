@@ -99,8 +99,9 @@ export function ContextMenu({ entries, position, label, onSelect, onClose }: Con
       items[nextMenuIndex(items.length, current, event.key)]?.focus();
     } else if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      const id = items[current]?.dataset.id;
-      if (id !== undefined) onSelect(id);
+      const item = items[current];
+      const id = item?.dataset.id;
+      if (id !== undefined && item?.getAttribute('aria-disabled') !== 'true') onSelect(id);
     } else if (event.key === 'Escape' || event.key === 'Tab') {
       event.preventDefault();
       onClose(true);
@@ -142,9 +143,13 @@ export function ContextMenu({ entries, position, label, onSelect, onClose }: Con
             tabIndex={-1}
             data-id={entry.id}
             aria-keyshortcuts={entry.hint ? ariaKeys(entry.hint) : undefined}
+            aria-disabled={entry.disabled ? true : undefined}
+            title={entry.title}
             className={`context-menu__item ${entry.danger ? 'context-menu__item--danger' : ''}`}
             onMouseEnter={(event) => event.currentTarget.focus({ preventScroll: true })}
-            onClick={() => onSelect(entry.id)}
+            onClick={() => {
+              if (!entry.disabled) onSelect(entry.id);
+            }}
           >
             <span className="context-menu__label">{entry.label}</span>
             {entry.hint && (

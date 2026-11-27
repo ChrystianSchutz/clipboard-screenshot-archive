@@ -6,9 +6,12 @@ import {
   compareStateFor,
   isSeparator,
   nextMenuIndex,
+  selectionLabels,
+  selectionMenuItems,
   type ClipMenuContext,
   type MenuEntry,
   type MenuItem,
+  type SelectionMenuContext,
 } from './context-menu';
 
 const TEXT_KINDS: readonly ClipKind[] = ['text', 'json', 'url', 'code'];
@@ -141,5 +144,104 @@ describe('nextMenuIndex', () => {
 
   it('has nowhere to go in an empty menu', () => {
     expect(nextMenuIndex(0, -1, 'ArrowDown')).toBe(-1);
+  });
+});
+
+describe('selectionMenuItems (right-click inside a multi-selection)', () => {
+  const context = (overrides: Partial<SelectionMenuContext> = {}): SelectionMenuContext => ({
+    noun: 'clip',
+    count: 3,
+    textCount: 3,
+    allPinned: false,
+    copyText: false,
+    compare: false,
+    ...overrides,
+  });
+  const items = (overrides: Partial<SelectionMenuContext> = {}) =>
+    selectionMenuItems(context(overrides)).filter(
+      (entry): entry is MenuItem => !isSeparator(entry),
+    );
+
+  it('puts the counts in the labels and keeps the single-clip shortcuts', () => {
+    expect(items().map((item) => [item.id, item.label, item.hint])).toEqual([
+      ['copy', 'Copy 3 clips', 'Enter'],
+      ['pin', 'Pin 3 clips', 'Ctrl+P'],
+      ['delete', 'Delete 3 clips', 'Del'],
+    ]);
+    expect(items().find((item) => item.id === 'delete')?.danger).toBe(true);
+    expect(selectionMenuItems(context()).filter(isSeparator)).toHaveLength(1);
+  });
+
+  it('counts only the text clips Copy joins, and says what it skips', () => {
+    const copy = items({ count: 4, textCount: 3 })[0];
+    expect(copy?.label).toBe('Copy 3 clips');
+    expect(copy?.title).toBe('1 image will be skipped');
+    expect(copy?.disabled).toBeUndefined();
+  });
+
+  it('unpins when every selected item is pinned', () => {
+    expect(items({ allPinned: true }).find((item) => item.id === 'pin')?.label).toBe(
+      'Unpin 3 clips',
+    );
+  });
+
+  it('offers Compare only for exactly two text clips', () => {
+    expect(items({ count: 2, textCount: 2, compare: true }).map((item) => item.id)).toEqual([
+      'copy',
+      'pin',
+      'compare',
+      'delete',
+    ]);
+    expect(items({ compare: false }).some((item) => item.id === 'compare')).toBe(false);
+    expect(items({ compare: null }).some((item) => item.id === 'compare')).toBe(false);
+  });
+
+  it('disables Copy of several screenshots, explains why, and offers Copy text instead', () => {
+    const shots = items({
+      noun: 'screenshot',
+      count: 2,
+      textCount: 0,
+      copyText: true,
+      compare: null,
+    });
+    expect(shots.map((item) => [item.id, item.label])).toEqual([
+      ['copy', 'Copy'],
+      ['copy-text', 'Copy text of 2 screenshots'],
+      ['pin', 'Pin 2 screenshots'],
+      ['delete', 'Delete 2 screenshots'],
+    ]);
+    expect(shots[0]?.disabled).toBe(true);
+    expect(shots[0]?.title).toBe('Several images cannot be copied at once. Use Copy text.');
+    expect(shots[0]?.hint).toBeUndefined();
+  });
+});
+
+describe('selectionLabels', () => {
+  it('words the summary pane title, the confirmation and the compare note', () => {
+    const labels = selectionLabels({
+      noun: 'clip',
+      count: 5,
+      textCount: 5,
+      allPinned: false,
+      copyText: false,
+      compare: false,
+    });
+    expect(labels.title).toBe('5 clips selected');
+    expect(labels.confirmDelete).toBe('Delete 5 clips?');
+    expect(labels.compareNote).toBe('Select exactly two text clips to compare');
+    expect(labels.copyNote).toBeNull();
+  });
+
+  it('explains that images alone cannot be joined in History', () => {
+    const labels = selectionLabels({
+      noun: 'clip',
+      count: 2,
+      textCount: 0,
+      allPinned: false,
+      copyText: false,
+      compare: false,
+    });
+    expect(labels.copyDisabled).toBe(true);
+    expect(labels.copyNote).toBe('Images cannot be joined into text. Select text clips.');
   });
 });

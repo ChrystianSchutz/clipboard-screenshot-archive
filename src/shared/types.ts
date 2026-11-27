@@ -51,6 +51,28 @@ export const CLIP_PREVIEW_CHARS = 2_000;
 /** Characters the preview pane renders (and highlights); the full text is one Enter away. */
 export const PREVIEW_PANE_CHARS = 20_000;
 
+/**
+ * Most clip ids one batch call (`history:delete-many`, `history:set-pinned-many`) accepts: the
+ * largest history page main serves. The renderer splits a larger selection into batches.
+ */
+export const MAX_BATCH_IDS = 500;
+
+/**
+ * Most characters one composed clipboard write (`screenshot:copy-text`, `history:copy-many`)
+ * accepts: the largest clip the archive records (`MAX_CLIP_CHARS`), so joining a few ordinary
+ * clips always fits.
+ */
+export const MAX_COPY_TEXT_CHARS = 1_000_000;
+
+/** What `history:copy-many` did. Image clips are never part of the joined text. */
+export type CopyClipsResult =
+  /** The text clips were joined (in the order asked) and put on the clipboard. */
+  | { readonly status: 'copied'; readonly copied: number; readonly skippedImages: number }
+  /** No text clip among the ids (only images, or all deleted meanwhile): nothing was written. */
+  | { readonly status: 'nothing'; readonly skippedImages: number }
+  /** The joined text would exceed `MAX_COPY_TEXT_CHARS`; decided before any text was read. */
+  | { readonly status: 'too-large'; readonly chars: number };
+
 /** Where a search matches a text: `[start, end)` in UTF-16 code units. */
 export type MatchRange = readonly [start: number, end: number];
 

@@ -72,11 +72,12 @@ export interface JobQueue<Input> {
   enqueue(job: KeyedJob<Input>): boolean;
   /** Drops the waiting jobs and the result of the running one (see `KeyedQueue.clear`). */
   clear(): string[];
+  /** Drops the matching waiting jobs and the result of a matching running one. */
+  withdraw(match: (key: string) => boolean): string[];
 }
 
-/** The analysis queue also withdraws single jobs (see `KeyedQueue.withdraw`). */
+/** The analysis queue also says which keys are still queued or running (see `KeyedQueue.has`). */
 export interface WithdrawableJobQueue<Input> extends JobQueue<Input> {
-  withdraw(match: (key: string) => boolean): string[];
   has(key: string): boolean;
 }
 
@@ -197,6 +198,18 @@ export class ImageCaptureService {
     this.generation.analysis++;
     this.automaticAnalyses.clear();
     return this.deps.analysis.clear();
+  }
+
+  /**
+   * The images were deleted (no clip uses them any more): drops their text recognition and
+   * analysis, queued or running, so the workers never read a file that is about to be swept and
+   * the next screenshots are not kept waiting behind work nobody can see. Returns the dropped keys.
+   */
+  withdrawImages(hashes: ReadonlySet<string>): { text: string[]; analysis: string[] } {
+    if (hashes.size === 0) return { text: [], analysis: [] };
+    for (const hash of hashes) this.automaticAnalyses.delete(hash);
+    const match = (key: string): boolean => hashes.has(key);
+    return { text: this.deps.ocr.withdraw(match), analysis: this.deps.analysis.withdraw(match) };
   }
 
   /**

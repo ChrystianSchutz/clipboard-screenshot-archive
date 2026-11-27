@@ -15,12 +15,24 @@ import { api } from '../../api';
 import { Icon } from '../../components/Icon';
 import { EmptyState, Kbd } from '../../components/primitives';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
+import { useListSelection } from '../../hooks/useListSelection';
 import { useNow } from '../../hooks/useNow';
+import {
+  applyPointer,
+  collapseToFocus,
+  focusAfterRemoval,
+  selectAll,
+  selectOnly,
+  selectRange,
+  type PointerIntent,
+} from '../../lib/selection';
 import { ClipContextMenu, isContextMenuKey, useClipContextMenu } from '../history/ClipContextMenu';
 import { ClipPreview } from '../history/ClipPreview';
+import { pressIntent } from '../history/ClipRow';
 import { applySearchOperators } from '../history/search-operators';
-import { reconcileSelection, selectionAfterRemoval } from '../history/selection';
+import { SelectionCount, SelectionSummary } from '../history/SelectionSummary';
 import { DEFAULT_FILTERS, useHistory } from '../history/useHistory';
+import { useSelectionActions } from '../history/useSelectionActions';
 import { ClipThumbnail } from '../ocr/ClipThumbnail';
 import { useScreenshotDetails } from '../ocr/ScreenshotPreview';
 import {
@@ -63,7 +75,6 @@ export function ScreenshotsView({
     [debouncedText],
   );
   const { clips, hasMore, loading, error, loadMore } = useHistory(filters);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
   const now = useNow();
   const clipMenu = useClipContextMenu();
 
@@ -72,8 +83,16 @@ export function ScreenshotsView({
   const sentinelRef = useRef<HTMLLIElement>(null);
 
   const ids = useMemo(() => clips.map((clip) => clip.id), [clips]);
-  const currentId = reconcileSelection(ids, selectedId);
-  const selected = clips.find((clip) => clip.id === currentId) ?? null;
+  const { selection, selectedIds, update: updateSelection } = useListSelection(ids);
+  /** The tile with keyboard focus (the only one in the tab order), where arrow keys move from. */
+  const currentId = selection.focus;
+  const selectedClips = useMemo(() => {
+    const byId = new Map(clips.map((clip) => [clip.id, clip]));
+    return selectedIds.flatMap((id) => byId.get(id) ?? []);
+  }, [clips, selectedIds]);
+  const multi = selectedClips.length > 1;
+  /** The one selected screenshot (preview, single actions); `null` for none or several. */
+  const selected = selectedClips.length === 1 ? (selectedClips[0] ?? null) : null;
   const highlightQuery = useMemo(() => ({ text: filters.text, regex: false }), [filters.text]);
 
   useEffect(() => {
@@ -99,11 +118,14 @@ export function ScreenshotsView({
     return () => observer.disconnect();
   }, [hasMore, loadMore]);
 
-  /** Selects a tile and moves keyboard focus onto it. */
-  const focusTile = useCallback((id: number | null) => {
-    setSelectedId(id);
-    if (id !== null) document.getElementById(tileId(id))?.focus();
-  }, []);
+  /** Selects just this tile and moves keyboard focus onto it. */
+  const focusTile = useCallback(
+    (id: number | null) => {
+      updateSelection(() => selectOnly(id));
+      if (id !== null) document.getElementById(tileId(id))?.focus();
+    },
+    [updateSelection],
+  );
 
   const copy = useCallback(
     async (id: number) => {
@@ -120,23 +142,60 @@ export function ScreenshotsView({
 
   const remove = useCallback(
     async (id: number, keepFocus: boolean) => {
-      const next = selectionAfterRemoval(ids, id);
+      const next = focusAfterRemoval(ids, new Set([id]));
       if (keepFocus) focusTile(next);
-      else setSelectedId(next);
-      await api.history.remove([id]);
+      else updateSelection(() => selectOnly(next));
+      await api.history.remove(id);
       onNotify('Deleted');
     },
-    [ids, focusTile, onNotify],
+    [ids, focusTile, onNotify, updateSelection],
+  );
+
+  const many = useSelectionActions({
+    noun: 'screenshot',
+    selection,
+    clips: selectedClips,
+    ids,
+    onNotify,
+    onRemoved: focusTile,
+  });
+
+  /**
+   * Cancelling the pending delete removes its buttons; when one of them had the focus (or nothing
+   * has it), focus goes back to the focused tile, so the arrow keys keep working.
+   */
+  const cancelDelete = (): void => {
+    many.cancelDelete();
+    const active = document.activeElement;
+    if (active === searchRef.current) return;
+    if (currentId !== null) document.getElementById(tileId(currentId))?.focus();
+  };
+
+  const selectTile = useCallback(
+    (id: number, intent: PointerIntent) => {
+      updateSelection((current, visible) => applyPointer(current, visible, id, intent));
+    },
+    [updateSelection],
   );
 
   const { openAtPointer } = clipMenu;
-  /** Right-click on a tile: select it and open its menu. */
+  /**
+   * Right-click on a tile: inside a multi-selection it keeps the selection (and focuses the
+   * tile), so the menu acts on all of it; anywhere else it selects just that tile.
+   */
   const openTileMenu = useCallback(
     (clip: ClipSummary, event: MouseEvent) => {
-      setSelectedId(clip.id);
-      openAtPointer(clip, event);
+      if (multi && selection.selected.has(clip.id)) {
+        updateSelection((current) =>
+          current.focus === clip.id ? current : { ...current, focus: clip.id },
+        );
+        openAtPointer(clip, event, selectedClips);
+      } else {
+        updateSelection(() => selectOnly(clip.id));
+        openAtPointer(clip, event);
+      }
     },
-    [openAtPointer],
+    [multi, selection, selectedClips, openAtPointer, updateSelection],
   );
 
   const columns = (): number => {
@@ -146,34 +205,63 @@ export function ScreenshotsView({
   };
 
   /**
-   * Keys on a focused tile: arrows move, Enter copies, Delete deletes, Ctrl+P pins, the ContextMenu
-   * key or Shift+F10 opens the menu.
+   * Keys on a focused tile: arrows move (with Shift they extend the selection), Ctrl+A selects
+   * every tile, Enter copies, Delete deletes, Ctrl+P pins, the ContextMenu key or Shift+F10 opens
+   * the menu.
    */
   const onGridKeyDown = (event: KeyboardEvent<HTMLUListElement>): void => {
     const onTile = event.target instanceof HTMLElement && event.target.dataset.tile !== undefined;
     if (!onTile) return;
     const mod = event.ctrlKey || event.metaKey;
-    if (isContextMenuKey(event) && selected) {
-      event.preventDefault();
-      clipMenu.openAtElement(selected, document.getElementById(tileId(selected.id)));
-    } else if (isGridKey(event.key) && !mod) {
-      event.preventDefault();
-      focusTile(moveInGrid(ids, currentId, event.key, columns()));
-    } else if (event.key === 'Enter' && selected) {
-      event.preventDefault();
-      void copy(selected.id);
-    } else if (event.key === 'Delete' && selected && !event.repeat) {
-      event.preventDefault();
-      void remove(selected.id, true);
-    } else if (mod && event.key.toLowerCase() === 'p' && selected) {
-      event.preventDefault();
-      void togglePin(selected.id, selected.pinned);
+    const key = event.key;
+    const focused = clips.find((clip) => clip.id === currentId) ?? null;
+    let action: (() => unknown) | null = null;
+    if (isContextMenuKey(event) && focused) {
+      action = () => {
+        const element = document.getElementById(tileId(focused.id));
+        if (multi && selection.selected.has(focused.id)) {
+          clipMenu.openAtElement(focused, element, selectedClips);
+        } else {
+          updateSelection(() => selectOnly(focused.id));
+          clipMenu.openAtElement(focused, element);
+        }
+      };
+    } else if (isGridKey(key) && !mod) {
+      const next = moveInGrid(ids, currentId, key, columns());
+      action = event.shiftKey
+        ? () => {
+            if (next === null) return;
+            updateSelection((current, visible) => selectRange(current, visible, next));
+            document.getElementById(tileId(next))?.focus();
+          }
+        : () => focusTile(next);
+    } else if (mod && key.toLowerCase() === 'a' && !event.shiftKey) {
+      action = () => updateSelection(selectAll);
+    } else if (key === 'Enter') {
+      if (multi) action = many.copy;
+      else if (selected) action = () => copy(selected.id);
+    } else if (key === 'Delete' && !event.repeat) {
+      if (multi) action = many.requestDelete;
+      else if (selected) action = () => remove(selected.id, true);
+    } else if (mod && key.toLowerCase() === 'p') {
+      if (multi) action = many.togglePin;
+      else if (selected) action = () => togglePin(selected.id, selected.pinned);
     }
+    if (!action) return;
+    event.preventDefault();
+    void action();
   };
 
-  /** Keys in the search box: Down enters the grid, Enter copies; Delete stays with the text. */
+  /**
+   * Keys in the search box: Down enters the grid, Enter copies, Ctrl+A in the empty box selects
+   * every screenshot; Delete stays with the text.
+   */
   const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
-    if (event.key === 'ArrowDown' && ids.length > 0) {
+    const mod = event.ctrlKey || event.metaKey;
+    if (mod && event.key.toLowerCase() === 'a' && !event.shiftKey && text === '') {
+      event.preventDefault();
+      updateSelection(selectAll);
+    } else if (event.key === 'ArrowDown' && ids.length > 0) {
       event.preventDefault();
       focusTile(currentId ?? ids[0] ?? null);
     } else if (event.key === 'Enter' && selected) {
@@ -185,7 +273,10 @@ export function ScreenshotsView({
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.key !== 'Escape') return;
     event.preventDefault();
-    if (text !== '') {
+    // One step back per press: the pending delete, the multi-selection, the search, the window.
+    if (many.confirmingDelete) cancelDelete();
+    else if (multi) updateSelection(collapseToFocus);
+    else if (text !== '') {
       setText('');
       searchRef.current?.focus();
     } else void api.window.hide();
@@ -244,21 +335,36 @@ export function ScreenshotsView({
               className="shots__grid"
               role="listbox"
               aria-label="Screenshots"
+              aria-multiselectable="true"
               onKeyDown={onGridKeyDown}
             >
               {clips.map((clip) => (
                 <ShotTile
                   key={clip.id}
                   clip={clip}
-                  selected={clip.id === currentId}
+                  selected={selection.selected.has(clip.id)}
+                  focused={clip.id === currentId}
                   now={now}
-                  onSelect={setSelectedId}
+                  onSelect={selectTile}
                   onActivate={(id) => void copy(id)}
                   onContextMenu={openTileMenu}
                 />
               ))}
               <li ref={sentinelRef} className="shots__sentinel" aria-hidden role="presentation" />
             </ul>
+            {multi && (
+              <SelectionSummary
+                clips={selectedClips}
+                noun="screenshot"
+                now={now}
+                confirmingDelete={many.confirmingDelete}
+                onCopy={() => void many.copy()}
+                onCopyText={() => void many.copyText()}
+                onTogglePin={() => void many.togglePin()}
+                onDelete={() => void many.requestDelete()}
+                onCancelDelete={cancelDelete}
+              />
+            )}
             {selected && (
               <ClipPreview
                 clip={selected}
@@ -278,7 +384,19 @@ export function ScreenshotsView({
 
       <ClipContextMenu
         controls={clipMenu}
-        handlers={{ copy, togglePin, remove: (id) => remove(id, true) }}
+        selectedIds={selectedIds}
+        handlers={{
+          copy,
+          togglePin,
+          remove: (id) => remove(id, true),
+          selection: {
+            noun: 'screenshot',
+            copy: many.copy,
+            copyText: many.copyText,
+            togglePin: many.togglePin,
+            remove: many.requestDelete,
+          },
+        }}
         onNotify={onNotify}
       />
 
@@ -287,6 +405,7 @@ export function ScreenshotsView({
           {pluralize(clips.length, 'screenshot')}
           {hasMore ? '+' : ''}
         </span>
+        <SelectionCount count={selectedClips.length} />
         <span className="clip-row__spacer" />
         <span className="statusbar__hint">
           <Kbd>←↑↓→</Kbd> select <Kbd>Enter</Kbd> copy <Kbd>Ctrl P</Kbd> pin <Kbd>Del</Kbd> delete{' '}
@@ -300,8 +419,10 @@ export function ScreenshotsView({
 interface ShotTileProps {
   readonly clip: ClipSummary;
   readonly selected: boolean;
+  /** Has keyboard focus within the grid: the one tile in the tab order. */
+  readonly focused: boolean;
   readonly now: number;
-  readonly onSelect: (id: number) => void;
+  readonly onSelect: (id: number, intent: PointerIntent) => void;
   readonly onActivate: (id: number) => void;
   readonly onContextMenu: (clip: ClipSummary, event: MouseEvent) => void;
 }
@@ -309,6 +430,7 @@ interface ShotTileProps {
 const ShotTile = memo(function ShotTile({
   clip,
   selected,
+  focused,
   now,
   onSelect,
   onActivate,
@@ -328,10 +450,13 @@ const ShotTile = memo(function ShotTile({
       role="option"
       aria-selected={selected}
       aria-label={`Screenshot ${dimensions} from ${app}, ${when}`}
-      tabIndex={selected ? 0 : -1}
+      tabIndex={focused ? 0 : -1}
       data-tile=""
-      className={`shot-tile ${selected ? 'shot-tile--selected' : ''}`}
-      onMouseDown={() => onSelect(clip.id)}
+      className={`shot-tile ${selected ? 'shot-tile--selected' : ''} ${focused ? 'shot-tile--focused' : ''}`}
+      onMouseDown={(event) => {
+        const intent = pressIntent(event);
+        if (intent !== null) onSelect(clip.id, intent);
+      }}
       onDoubleClick={() => onActivate(clip.id)}
       onContextMenu={(event) => onContextMenu(clip, event)}
     >

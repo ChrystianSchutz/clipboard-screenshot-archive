@@ -51,7 +51,7 @@ flowchart LR
 - **Two renderer windows**, both `sandbox: true`, `contextIsolation: true`, no Node:
   - **Palette**: frameless, always on top, created hidden at startup and kept alive, so the shortcut shows it instantly. On Windows its HWND also hosts the clipboard listener.
   - **Compare**: created on first use. The JSON diff runs here, in pure TypeScript ([`json-diff.ts`](../src/shared/json-diff.ts)).
-- **Preload.** One self-contained CommonJS file ([`preload/index.ts`](../src/preload/index.ts)) exposes a typed facade over 15 invoke channels and 4 push events. The renderer never touches `ipcRenderer`.
+- **Preload.** One self-contained CommonJS file ([`preload/index.ts`](../src/preload/index.ts)) exposes a typed facade over 27 invoke channels and 6 push events. The renderer never touches `ipcRenderer`.
 - **Shared code** ([`src/shared`](../src/shared)) is pure: the IPC contract, types, search parser, categories, JSON and text diff, color math. Both sides import it, so the contract cannot drift.
 
 Platform adapters, chosen once at startup:

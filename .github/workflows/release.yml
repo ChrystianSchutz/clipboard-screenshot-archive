@@ -26,6 +26,9 @@ jobs:
             target: --mac
           - os: ubuntu-latest
             target: --linux
+            # The AppImage target rejects "&" in the product file name, so Linux builds
+            # use a spelled-out name.
+            extra: -c.productName="Clipboard and Screenshot Archive"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -46,7 +49,7 @@ jobs:
       # Unsigned: no certificates are configured. Turning off identity discovery stops
       # electron-builder from picking up a random keychain identity on the macOS runner.
       - name: Package (unsigned)
-        run: npx electron-builder ${{ matrix.target }} --publish never
+        run: npx electron-builder ${{ matrix.target }} --publish never ${{ matrix.extra }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - uses: actions/upload-artifact@v7

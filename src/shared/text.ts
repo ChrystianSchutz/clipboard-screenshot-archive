@@ -20,6 +20,22 @@ export function compactNumber(value: number): string {
   return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
 }
 
+/** What separates the texts of several clips copied as one: one clip per line. */
+export const JOIN_SEPARATOR = '\n';
+
+/** Joined text of several clips for one clipboard write: in list order, one per line. */
+export function joinTexts(texts: readonly string[]): string {
+  return texts.join(JOIN_SEPARATOR);
+}
+
+/** The length `joinTexts` would return for texts of these lengths, without building the string. */
+export function joinedLength(lengths: readonly number[]): number {
+  if (lengths.length === 0) return 0;
+  return (
+    lengths.reduce((sum, length) => sum + length, 0) + (lengths.length - 1) * JOIN_SEPARATOR.length
+  );
+}
+
 export function pluralize(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }

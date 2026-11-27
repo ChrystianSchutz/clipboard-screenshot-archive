@@ -41,9 +41,12 @@ const api: ClipboardArchiveApi = {
     regexRanges: (pattern, text) => invoke('history:regex-ranges', pattern, text),
     apps: () => invoke('history:apps'),
     restore: (id) => invoke('history:restore', id),
-    remove: (ids) => invoke('history:delete', ids),
+    remove: (id) => invoke('history:delete', id),
+    removeMany: (ids) => invoke('history:delete-many', ids),
+    copyMany: (ids) => invoke('history:copy-many', ids),
     clear: (options) => invoke('history:clear', options),
     setPinned: (id, pinned) => invoke('history:set-pinned', id, pinned),
+    setPinnedMany: (ids, pinned) => invoke('history:set-pinned-many', ids, pinned),
     onChanged: (listener) => subscribe('history:changed', () => listener()),
   },
   stats: {

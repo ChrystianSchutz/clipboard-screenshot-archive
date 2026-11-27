@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { detectCategories } from '@shared/categories';
 import { detectClipKind } from '@shared/clip-kind';
 import type { Clip, ClipSource, Settings } from '@shared/types';
-import type { RecordInput, RecordResult } from '../storage/clip-repository';
+import { hashContent, type RecordInput, type RecordResult } from '../storage/clip-repository';
 import { CaptureGate } from './capture-gate';
 import { friendlyAppName } from './source/app-names';
 import { skipReason, type SkipReason } from './privacy';
@@ -141,6 +141,11 @@ const sleepFor = (ms: number): Promise<void> =>
  *   reported. Equal text proves nothing: an identical copy made by another app is recorded, and a
  *   failed write leaves no token behind. Where the marker cannot be read, a restore is recorded as
  *   a bump of its own clip; there is no text-equality fallback that could swallow a real copy.
+ * - Text the app composes itself (joined clips, text read from a screenshot) is not in the history
+ *   yet, so a missed marker would add a clip the user never copied. Such a write
+ *   (`writeComposedText`) is also recognised by its content, for as long as the clipboard holds
+ *   it: until a change with other content, a private copy or an image is handled. That does not
+ *   depend on reading the marker or on its token still being live.
  * - Pause, resume and shutdown move the capture generation on (`CaptureGate`): a change reported
  *   before that is dropped at the record boundary, however long its privacy retry or image save took.
  */
@@ -156,6 +161,11 @@ export class CaptureService {
   /** Id of the last write that has begun running. */
   private writesStarted = 0;
   private pending: PendingWrite[] = [];
+  /**
+   * Hash of the last text the app composed and wrote (see `writeComposedText`), while the clipboard
+   * may still hold it; `null` once a change with other content was handled.
+   */
+  private composedHash: string | null = null;
 
   constructor(private readonly deps: CaptureDeps) {
     this.now = deps.now ?? Date.now;
@@ -189,6 +199,26 @@ export class CaptureService {
    */
   writeWithoutRecording(text: string): Promise<void> {
     return this.writeMarked((marker) => this.deps.io.writeText(text, marker));
+  }
+
+  /**
+   * Writes text the app composed (joined clips, text read from a screenshot) without recording it.
+   * Unlike a restore, recording it by mistake would add a clip the user never copied, so the change
+   * is also recognised by its content (see the class comment), not only by its write marker.
+   */
+  writeComposedText(text: string): Promise<void> {
+    return this.writeMarked(async (marker) => {
+      // Set before the write starts: its change can be reported while the write still runs.
+      const previous = this.composedHash;
+      const hash = hashContent(text);
+      this.composedHash = hash;
+      try {
+        await this.deps.io.writeText(text, marker);
+      } catch (error) {
+        if (this.composedHash === hash) this.composedHash = previous;
+        throw error;
+      }
+    });
   }
 
   /**
@@ -313,8 +343,11 @@ export class CaptureService {
       if (own === 'self') return { status: 'skipped', reason: 'self-write' };
       // A restore that began after this change replaced it: the copy it reported is gone.
       if (own === 'later') return { status: 'skipped', reason: 'superseded' };
+      if (this.isComposed(read.text)) return { status: 'skipped', reason: 'self-write' };
       text = read.text;
       markerAtRead = read.marker;
+    } else {
+      this.composedHash = null;
     }
 
     const reason = skipReason({
@@ -341,6 +374,17 @@ export class CaptureService {
 
     this.deps.onRecorded?.(clip, created);
     return { status: 'recorded', clip, created };
+  }
+
+  /**
+   * Whether `text` is the text the app composed last and the clipboard has held nothing else since.
+   * Any other content ends that, so a later identical copy from another app is recorded.
+   */
+  private isComposed(text: string): boolean {
+    if (this.composedHash === null) return false;
+    if (text !== '' && hashContent(text) === this.composedHash) return true;
+    this.composedHash = null;
+    return false;
   }
 
   /**

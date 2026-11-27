@@ -34,6 +34,9 @@ describe('authorizeSender', () => {
   it.each<InvokeChannel>([
     'history:query',
     'history:delete',
+    'history:delete-many',
+    'history:copy-many',
+    'history:set-pinned-many',
     'history:clear',
     'history:restore',
     'settings:update',

@@ -142,6 +142,17 @@ export class ImageRepository {
     return row?.image_hash ?? null;
   }
 
+  /** The image hashes of these clips (text clips have none), each once. */
+  hashesOf(clipIds: readonly number[]): string[] {
+    if (clipIds.length === 0) return [];
+    const rows = this.db
+      .prepare(
+        'SELECT DISTINCT image_hash FROM clip_images WHERE clip_id IN (SELECT value FROM json_each(?))',
+      )
+      .all(JSON.stringify(clipIds)) as { image_hash: string }[];
+    return rows.map((row) => row.image_hash);
+  }
+
   clipIdOf(hash: string): number | null {
     const row = this.db
       .prepare('SELECT clip_id FROM clip_images WHERE image_hash = ?')

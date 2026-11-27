@@ -36,6 +36,8 @@ export const PAGE_SIZE = 60;
 const MAX_REQUEST = 500;
 /** Upper bound on the rows a refresh reloads, however far the user has scrolled. */
 const MAX_RELOAD = 5_000;
+/** Shown while the regex is invalid. One shared array, so its identity is stable across renders. */
+const NO_CLIPS: readonly ClipSummary[] = [];
 
 /** Maps UI filter state to the IPC query, omitting everything that is not set. */
 export function toQuery(filters: HistoryFilters, limit = PAGE_SIZE): HistoryQuery {
@@ -58,23 +60,47 @@ export function regexError(filters: HistoryFilters): string | null {
   return result.ok ? null : result.error;
 }
 
+/** Where a row sits in the list order (newest copy first, the higher id first on a tie). */
+export function cursorOf(clip: ClipSummary): HistoryCursor {
+  return { lastCopiedAt: clip.lastCopiedAt, id: clip.id };
+}
+
+/** Whether `clip` comes after `cursor` in the list order (is older). */
+function isAfter(clip: ClipSummary, cursor: HistoryCursor): boolean {
+  return (
+    clip.lastCopiedAt < cursor.lastCopiedAt ||
+    (clip.lastCopiedAt === cursor.lastCopiedAt && clip.id < cursor.id)
+  );
+}
+
 /**
- * Loads at least `count` rows (or every row there is) for `query`, page by page.
+ * Loads at least `count` rows (or every row there is) for `query`, page by page, and with
+ * `through` also every row down to that position in the list.
  *
  * The main process may return fewer rows than asked (a page has a size budget), so one large
  * request is not enough to restore what the user had scrolled through; this follows the cursor
- * until the count is reached. `isStale` stops early when a newer request has started.
+ * until the count is reached. A refresh passes the position of the last row it showed as
+ * `through`: new copies arriving at the top then lengthen the list instead of pushing loaded rows
+ * (and the selection on them) out at the bottom. `isStale` stops early when a newer request has
+ * started.
  */
 export async function fetchRows(
   query: (q: HistoryQuery) => Promise<HistoryPage>,
   base: HistoryQuery,
   count: number,
   isStale: () => boolean,
+  through: HistoryCursor | null = null,
 ): Promise<HistoryPage> {
-  const rows: ClipSummary[] = [];
+  let rows: ClipSummary[] = [];
   let cursor: HistoryCursor | null = null;
+  const reachedEnd = (): boolean => {
+    const last = rows.at(-1);
+    return through === null || (last !== undefined && isAfter(last, through));
+  };
   do {
-    const limit = Math.min(Math.max(count - rows.length, 1), MAX_REQUEST);
+    const missing = count - rows.length;
+    // Past the count, only `through` is still to be reached: fetch ordinary pages for it.
+    const limit = Math.min(missing > 0 ? missing : PAGE_SIZE, MAX_REQUEST);
     const page: HistoryPage = await query({
       ...base,
       limit,
@@ -84,7 +110,18 @@ export async function fetchRows(
     cursor = page.nextCursor;
     // An empty page with a cursor would loop forever; treat it as the end.
     if (page.clips.length === 0) cursor = null;
-  } while (cursor !== null && rows.length < count && !isStale());
+  } while (cursor !== null && (rows.length < count || !reachedEnd()) && !isStale());
+
+  // Keep the count, and every row up to `through`, but not the rest of the last page.
+  if (through !== null && rows.length > count) {
+    const upTo = rows.findIndex((row) => isAfter(row, through));
+    const keep = Math.max(count, upTo === -1 ? rows.length : upTo);
+    const last = rows[keep - 1];
+    if (keep < rows.length && last) {
+      rows = rows.slice(0, keep);
+      cursor = cursorOf(last);
+    }
+  }
   return { clips: rows, nextCursor: cursor };
 }
 
@@ -101,6 +138,17 @@ export interface HistoryState {
  * main process reports a change. Responses that arrive after a newer request are dropped,
  * so fast typing can never show results for an old query.
  */
+/** What a refresh needs to know about the rows on screen: how many, and where the last one is. */
+function rememberRows(
+  counter: { current: number },
+  end: { current: HistoryCursor | null },
+  rows: readonly ClipSummary[],
+): void {
+  counter.current = rows.length;
+  const last = rows.at(-1);
+  end.current = last ? cursorOf(last) : null;
+}
+
 export function useHistory(filters: HistoryFilters): HistoryState {
   const [clips, setClips] = useState<readonly ClipSummary[]>([]);
   const [cursor, setCursor] = useState<HistoryCursor | null>(null);
@@ -110,14 +158,19 @@ export function useHistory(filters: HistoryFilters): HistoryState {
   const [loadingMore, setLoadingMore] = useState(false);
   const requestId = useRef(0);
   const loadedCount = useRef(0);
+  /** Position of the last loaded row: a refresh reloads at least down to it. */
+  const loadedEnd = useRef<HistoryCursor | null>(null);
 
   const invalid = regexError(filters);
   const queryKey = JSON.stringify(toQuery(filters));
   const loading = invalid === null && (loadedKey !== queryKey || loadingMore);
 
-  /** Loads the first `count` rows (one page, or several on a refresh) and replaces the list. */
+  /**
+   * Loads the first `count` rows (one page, or several on a refresh), and every row down to
+   * `through` when given, and replaces the list.
+   */
   const load = useCallback(
-    (count: number) => {
+    (count: number, through: HistoryCursor | null = null) => {
       const id = ++requestId.current;
       const isStale = (): boolean => id !== requestId.current;
       const settle = (): void => {
@@ -127,9 +180,15 @@ export function useHistory(filters: HistoryFilters): HistoryState {
       };
       // State changes only in the callbacks, never synchronously in the effects that call this.
       const request =
-        count <= PAGE_SIZE
+        count <= PAGE_SIZE && through === null
           ? api.history.query(toQuery(filters, count))
-          : fetchRows((query) => api.history.query(query), toQuery(filters), count, isStale);
+          : fetchRows(
+              (query) => api.history.query(query),
+              toQuery(filters),
+              count,
+              isStale,
+              through,
+            );
       request.then(
         (page) => {
           if (isStale()) return;
@@ -137,7 +196,7 @@ export function useHistory(filters: HistoryFilters): HistoryState {
           setClips(page.clips);
           setCursor(page.nextCursor);
           setError(null);
-          loadedCount.current = page.clips.length;
+          rememberRows(loadedCount, loadedEnd, page.clips);
           settle();
         },
         (cause: unknown) => {
@@ -155,12 +214,14 @@ export function useHistory(filters: HistoryFilters): HistoryState {
     load(PAGE_SIZE);
   }, [load, invalid]);
 
-  // Keep as many rows as the user has already scrolled through when the history changes
-  // (a new copy, a deletion, or a screenshot whose text or analysis just became searchable).
+  // Keep every row the user has already scrolled through when the history changes (a new copy,
+  // a deletion, or a screenshot whose text or analysis just became searchable): as many rows as
+  // before, and down to the last one shown, so rows (and selections) survive new copies above.
   useEffect(
     () =>
       api.history.onChanged(() => {
-        load(Math.min(Math.max(loadedCount.current, PAGE_SIZE), MAX_RELOAD));
+        const count = Math.min(Math.max(loadedCount.current, PAGE_SIZE), MAX_RELOAD);
+        load(count, loadedCount.current <= MAX_RELOAD ? loadedEnd.current : null);
       }),
     [load],
   );
@@ -175,7 +236,7 @@ export function useHistory(filters: HistoryFilters): HistoryState {
         if (id !== requestId.current) return;
         setClips((current) => {
           const next = [...current, ...page.clips];
-          loadedCount.current = next.length;
+          rememberRows(loadedCount, loadedEnd, next);
           return next;
         });
         setCursor(page.nextCursor);
@@ -189,7 +250,7 @@ export function useHistory(filters: HistoryFilters): HistoryState {
   }, [cursor, filters, loading]);
 
   return {
-    clips: invalid === null ? clips : [],
+    clips: invalid === null ? clips : NO_CLIPS,
     hasMore: cursor !== null,
     loading,
     error: invalid ?? error,

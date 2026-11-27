@@ -231,14 +231,6 @@
   display: flex;
   gap: 6px;
 }
-.button--danger-solid {
-  background: var(--removed);
-  border-color: transparent;
-  color: #ffffff;
-}
-.button--danger-solid:hover {
-  background: color-mix(in srgb, var(--removed) 88%, #000000);
-}
 
 .settings__about {
   display: flex;

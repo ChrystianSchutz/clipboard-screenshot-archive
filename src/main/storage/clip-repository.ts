@@ -182,6 +182,24 @@ export class ClipRepository {
     return row ? toClip(row) : null;
   }
 
+  /** Kind and length of these clips, without their text (gone ids are left out). */
+  sizesOf(ids: readonly number[]): Map<number, { kind: ClipKind; charCount: number }> {
+    const rows = this.db
+      .prepare(
+        'SELECT id, kind, char_count FROM clips WHERE id IN (SELECT value FROM json_each(?))',
+      )
+      .all(JSON.stringify(ids)) as { id: number; kind: ClipKind; char_count: number }[];
+    return new Map(rows.map((row) => [row.id, { kind: row.kind, charCount: row.char_count }]));
+  }
+
+  /** The full text of these clips, read in one query (gone ids are left out). */
+  contentsOf(ids: readonly number[]): Map<number, string> {
+    const rows = this.db
+      .prepare('SELECT id, content FROM clips WHERE id IN (SELECT value FROM json_each(?))')
+      .all(JSON.stringify(ids)) as { id: number; content: string }[];
+    return new Map(rows.map((row) => [row.id, row.content]));
+  }
+
   findByContent(content: string): Clip | null {
     const row = this.db
       .prepare(`SELECT ${CLIP_COLUMNS} FROM clips WHERE content_hash = ?`)
@@ -303,12 +321,20 @@ export class ClipRepository {
     return rows.map((row) => row.app);
   }
 
+  /**
+   * Deletes clips (one, or a whole multi-selection) in one transaction: all of them or, if
+   * anything fails, none. Their copy events, categories, extra search text and image rows go
+   * with them (foreign keys cascade, triggers drop them from the search index); image files are
+   * left for the orphan sweep. Ids that no longer exist are skipped. Returns how many were removed.
+   */
   delete(ids: readonly number[]): number {
     if (ids.length === 0) return 0;
-    const result = this.db
-      .prepare('DELETE FROM clips WHERE id IN (SELECT value FROM json_each(?))')
-      .run(JSON.stringify(ids));
-    return Number(result.changes);
+    return transaction(this.db, () => {
+      const result = this.db
+        .prepare('DELETE FROM clips WHERE id IN (SELECT value FROM json_each(?))')
+        .run(JSON.stringify(ids));
+      return Number(result.changes);
+    });
   }
 
   clear(options: { keepPinned: boolean }): number {
@@ -317,7 +343,18 @@ export class ClipRepository {
   }
 
   setPinned(id: number, pinned: boolean): void {
-    this.db.prepare('UPDATE clips SET pinned = ? WHERE id = ?').run(pinned ? 1 : 0, id);
+    this.setPinnedMany([id], pinned);
+  }
+
+  /** Pins or unpins clips in one transaction. Returns how many exist (whether or not they changed). */
+  setPinnedMany(ids: readonly number[], pinned: boolean): number {
+    if (ids.length === 0) return 0;
+    return transaction(this.db, () => {
+      const result = this.db
+        .prepare('UPDATE clips SET pinned = ? WHERE id IN (SELECT value FROM json_each(?))')
+        .run(pinned ? 1 : 0, JSON.stringify(ids));
+      return Number(result.changes);
+    });
   }
 
   /** Keeps the newest `maxClips` unpinned clips. Pinned clips never count and are never pruned. */

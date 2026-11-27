@@ -54,6 +54,17 @@
   opacity: 0.85;
 }
 
+/* Shown for discoverability, not available: muted, and focus only outlines it. */
+.context-menu__item[aria-disabled='true'] {
+  color: var(--text-faint);
+  cursor: default;
+}
+.context-menu__item[aria-disabled='true']:focus,
+.context-menu__item[aria-disabled='true']:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
 .context-menu__item--danger {
   color: var(--removed);
 }

@@ -14,14 +14,26 @@ import { pluralize } from '@shared/text';
 import { api } from '../../api';
 import { EmptyState, Kbd } from '../../components/primitives';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
+import { useListSelection } from '../../hooks/useListSelection';
 import { useNow } from '../../hooks/useNow';
+import {
+  applyPointer,
+  collapseToFocus,
+  focusAfterRemoval,
+  moveSelection,
+  selectAll,
+  selectOnly,
+  selectRange,
+  type PointerIntent,
+} from '../../lib/selection';
 import { ClipContextMenu, isContextMenuKey, useClipContextMenu } from './ClipContextMenu';
 import { ClipPreview } from './ClipPreview';
 import { ClipRow } from './ClipRow';
 import { FilterBar } from './FilterBar';
 import { applySearchOperators } from './search-operators';
-import { moveSelection, reconcileSelection, selectionAfterRemoval } from './selection';
+import { SelectionCount, SelectionSummary } from './SelectionSummary';
 import { DEFAULT_FILTERS, useHistory, type HistoryFilters } from './useHistory';
+import { useSelectionActions } from './useSelectionActions';
 import './history.css';
 
 const PAGE_JUMP = 8;
@@ -54,7 +66,6 @@ export function HistoryView({
     [filters, debouncedText, apps],
   );
   const { clips, hasMore, loading, error, loadMore } = useHistory(effective.filters);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [markedId, setMarkedId] = useState<number | null>(null);
   const now = useNow();
   const clipMenu = useClipContextMenu();
@@ -64,8 +75,16 @@ export function HistoryView({
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   const ids = useMemo(() => clips.map((clip) => clip.id), [clips]);
-  const currentId = reconcileSelection(ids, selectedId);
-  const selected = clips.find((clip) => clip.id === currentId) ?? null;
+  const { selection, selectedIds, update: updateSelection } = useListSelection(ids);
+  /** The row with the focus ring, where arrow keys move from. */
+  const currentId = selection.focus;
+  const selectedClips = useMemo(() => {
+    const byId = new Map(clips.map((clip) => [clip.id, clip]));
+    return selectedIds.flatMap((id) => byId.get(id) ?? []);
+  }, [clips, selectedIds]);
+  const multi = selectedClips.length > 1;
+  /** The one selected clip (preview, single-clip actions); `null` for none or several. */
+  const selected = selectedClips.length === 1 ? (selectedClips[0] ?? null) : null;
   const highlightQuery = useMemo(
     () => ({ text: effective.filters.text, regex: effective.filters.regex }),
     [effective.filters.text, effective.filters.regex],
@@ -140,12 +159,45 @@ export function HistoryView({
 
   const remove = useCallback(
     async (id: number) => {
-      setSelectedId(selectionAfterRemoval(ids, id));
+      updateSelection(() => selectOnly(focusAfterRemoval(ids, new Set([id]))));
       if (markedId === id) setMarkedId(null);
-      await api.history.remove([id]);
+      await api.history.remove(id);
       onNotify('Deleted');
     },
-    [ids, markedId, onNotify],
+    [ids, markedId, onNotify, updateSelection],
+  );
+
+  /**
+   * After the summary pane's buttons go away (a delete, a cancelled delete), focus goes to the list
+   * unless it is in the search box, so the arrow keys keep working instead of landing on the page.
+   */
+  const keepKeyboardInList = useCallback(() => {
+    if (document.activeElement !== searchRef.current)
+      listRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  const afterBatchRemoval = useCallback(
+    (next: number | null) => {
+      if (markedId !== null && selection.selected.has(markedId)) setMarkedId(null);
+      updateSelection(() => selectOnly(next));
+      keepKeyboardInList();
+    },
+    [markedId, selection, updateSelection, keepKeyboardInList],
+  );
+  const many = useSelectionActions({
+    noun: 'clip',
+    selection,
+    clips: selectedClips,
+    ids,
+    onNotify,
+    onRemoved: afterBatchRemoval,
+  });
+
+  const selectRow = useCallback(
+    (id: number, intent: PointerIntent) => {
+      updateSelection((current, visible) => applyPointer(current, visible, id, intent));
+    },
+    [updateSelection],
   );
 
   /** First press marks A; pressing on another clip opens the compare window for A vs B. */
@@ -163,47 +215,102 @@ export function HistoryView({
   );
 
   const { openAtPointer } = clipMenu;
-  /** Right-click on a row: select it and open its menu. */
+  /**
+   * Right-click on a row: inside a multi-selection it keeps the selection (and focuses the row),
+   * so the menu acts on all of it; anywhere else it selects just that row.
+   */
   const openRowMenu = useCallback(
     (clip: ClipSummary, event: MouseEvent) => {
-      setSelectedId(clip.id);
-      openAtPointer(clip, event);
+      if (multi && selection.selected.has(clip.id)) {
+        updateSelection((current) =>
+          current.focus === clip.id ? current : { ...current, focus: clip.id },
+        );
+        openAtPointer(clip, event, selectedClips);
+      } else {
+        updateSelection(() => selectOnly(clip.id));
+        openAtPointer(clip, event);
+      }
     },
-    [openAtPointer],
+    [multi, selection, selectedClips, openAtPointer, updateSelection],
   );
+
+  /** Arrow keys and PageUp/PageDown: move the focus; with Shift, extend the selection to it. */
+  const moveBy = (delta: number, extend: boolean) => (): void => {
+    updateSelection((current, visible) => {
+      const next = moveSelection(visible, current.focus, delta);
+      if (next === null) return current;
+      return extend ? selectRange(current, visible, next) : selectOnly(next);
+    });
+  };
+
+  const cancelDelete = (): void => {
+    many.cancelDelete();
+    keepKeyboardInList();
+  };
+
+  /** Ctrl+A selects every row from the list, or from the search box while it is empty. */
+  function selectsAllRows(target: EventTarget): boolean {
+    if (target === searchRef.current) return filters.text === '';
+    return inside(listRef.current, target);
+  }
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     const mod = event.ctrlKey || event.metaKey;
+    const key = event.key.toLowerCase();
+    const focused = clips.find((clip) => clip.id === currentId) ?? null;
+    const deleteKey = event.key === 'Delete' && !event.repeat && !editsText(event.target);
+    // Enter and Space on a focused button press that button (Cancel, Delete, Copy, a filter);
+    // they never also run the list's shortcut for the selected clips.
+    if ((event.key === 'Enter' || event.key === ' ') && activatesOnKey(event.target)) return;
     // The action bound to this key, or `null` to let the key do its default.
     const shortcut = (): (() => unknown) | null => {
       switch (true) {
-        case event.key === 'ArrowDown':
-          return () => setSelectedId(moveSelection(ids, currentId, 1));
-        case event.key === 'ArrowUp':
-          return () => setSelectedId(moveSelection(ids, currentId, -1));
-        case event.key === 'PageDown':
-          return () => setSelectedId(moveSelection(ids, currentId, PAGE_JUMP));
-        case event.key === 'PageUp':
-          return () => setSelectedId(moveSelection(ids, currentId, -PAGE_JUMP));
-        case isContextMenuKey(event) && selected !== null:
-          return () =>
-            clipMenu.openAtElement(selected, document.getElementById(`clip-${selected.id}`));
+        case event.key === 'ArrowDown' && !mod:
+          return moveBy(1, event.shiftKey);
+        case event.key === 'ArrowUp' && !mod:
+          return moveBy(-1, event.shiftKey);
+        case event.key === 'PageDown' && !mod:
+          return moveBy(PAGE_JUMP, event.shiftKey);
+        case event.key === 'PageUp' && !mod:
+          return moveBy(-PAGE_JUMP, event.shiftKey);
+        // Every row, from the list or the empty search box (where there is no text to select).
+        case mod && key === 'a' && !event.shiftKey && selectsAllRows(event.target):
+          return () => updateSelection(selectAll);
+        case isContextMenuKey(event) && focused !== null:
+          return () => {
+            const element = document.getElementById(`clip-${String(focused.id)}`);
+            if (multi && selection.selected.has(focused.id)) {
+              clipMenu.openAtElement(focused, element, selectedClips);
+            } else {
+              updateSelection(() => selectOnly(focused.id));
+              clipMenu.openAtElement(focused, element);
+            }
+          };
+        case event.key === 'Enter' && multi:
+          return many.copy;
         case event.key === 'Enter' && selected !== null:
           return () => copy(selected.id);
-        case mod && event.key.toLowerCase() === 'p' && selected !== null:
+        case mod && key === 'p' && multi:
+          return many.togglePin;
+        case mod && key === 'p' && selected !== null:
           return () => togglePin(selected.id, selected.pinned);
-        case mod && event.key.toLowerCase() === 'd' && selected !== null:
+        case mod && key === 'd' && multi:
+          return many.compare;
+        case mod && key === 'd' && selected !== null:
           return () => compare(selected.id);
-        case mod && event.key.toLowerCase() === 'r':
+        case mod && key === 'r':
           return () => updateFilters({ regex: !filters.regex });
-        case event.key === 'Delete' &&
-          selected !== null &&
-          !event.repeat &&
-          !editsText(event.target):
+        case deleteKey && multi:
+          return many.requestDelete;
+        case deleteKey && selected !== null:
           return () => remove(selected.id);
         case event.key === 'Escape':
+          // One step back per press: the pending delete, the multi-selection, the A mark, the
+          // search text, and only then the window.
           return () => {
-            if (markedId !== null) setMarkedId(null);
+            if (many.confirmingDelete) cancelDelete();
+            else if (multi) updateSelection(collapseToFocus);
+            else if (markedId !== null) setMarkedId(null);
             else if (filters.text !== '') updateFilters({ text: '' });
             else void api.window.hide();
           };
@@ -263,24 +370,39 @@ export function HistoryView({
               className="history__list"
               role="listbox"
               aria-label="Clipboard history"
-              aria-activedescendant={currentId !== null ? `clip-${currentId}` : undefined}
-              tabIndex={-1}
+              aria-multiselectable="true"
+              aria-activedescendant={currentId !== null ? `clip-${String(currentId)}` : undefined}
+              tabIndex={0}
             >
               {clips.map((clip) => (
                 <ClipRow
                   key={clip.id}
                   clip={clip}
-                  selected={clip.id === currentId}
+                  selected={selection.selected.has(clip.id)}
+                  focused={clip.id === currentId}
                   marked={clip.id === markedId}
                   now={now}
                   query={highlightQuery}
-                  onSelect={setSelectedId}
+                  onSelect={selectRow}
                   onActivate={(id) => void copy(id)}
                   onContextMenu={openRowMenu}
                 />
               ))}
               <div ref={sentinelRef} className="history__sentinel" aria-hidden />
             </ul>
+            {multi && (
+              <SelectionSummary
+                clips={selectedClips}
+                noun="clip"
+                now={now}
+                confirmingDelete={many.confirmingDelete}
+                onCopy={() => void many.copy()}
+                onTogglePin={() => void many.togglePin()}
+                onCompare={() => void many.compare()}
+                onDelete={() => void many.requestDelete()}
+                onCancelDelete={cancelDelete}
+              />
+            )}
             {selected && (
               <ClipPreview
                 clip={selected}
@@ -302,7 +424,20 @@ export function HistoryView({
       <ClipContextMenu
         controls={clipMenu}
         markedId={markedId}
-        handlers={{ copy, togglePin, compare, remove }}
+        selectedIds={selectedIds}
+        handlers={{
+          copy,
+          togglePin,
+          compare,
+          remove,
+          selection: {
+            noun: 'clip',
+            copy: many.copy,
+            togglePin: many.togglePin,
+            compare: many.compare,
+            remove: many.requestDelete,
+          },
+        }}
         onNotify={onNotify}
       />
 
@@ -314,6 +449,7 @@ export function HistoryView({
           {pluralize(clips.length, 'clip')}
           {hasMore ? '+' : ''}
         </span>
+        <SelectionCount count={selectedClips.length} />
         <span className="clip-row__spacer" />
         <span className="statusbar__hint">
           <Kbd>↑↓</Kbd> select <Kbd>Enter</Kbd> copy <Kbd>Ctrl P</Kbd> pin <Kbd>Ctrl D</Kbd> compare{' '}
@@ -322,6 +458,22 @@ export function HistoryView({
       </footer>
     </div>
   );
+}
+
+/** Whether `target` is `container` or inside it. */
+function inside(container: HTMLElement | null, target: EventTarget): boolean {
+  return container !== null && target instanceof Node && container.contains(target);
+}
+
+/**
+ * Whether Enter or Space on `target` belongs to it: a button, link, checkbox or select, which the
+ * key presses or opens. The search box and the list are not: there the keys act on the clips.
+ */
+function activatesOnKey(target: EventTarget): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLInputElement)
+    return target.type === 'checkbox' || target.type === 'radio';
+  return target.closest('button, a[href], select, [role="button"], [role="menuitem"]') !== null;
 }
 
 function sameList(a: readonly string[], b: readonly string[]): boolean {

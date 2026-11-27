@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://chrystianschutz.github.io/clipboard-screenshot-archive/sitemap.xml
