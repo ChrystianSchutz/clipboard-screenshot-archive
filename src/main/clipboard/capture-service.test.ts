@@ -410,52 +410,28 @@ describe('CaptureService', () => {
       expect(repository.record).not.toHaveBeenCalled();
     });
 
-    it('is not recorded when its marker cannot be read', async () => {
-      const service = createService();
-      await service.writeComposedText(JOINED);
-      io.readWriteMarker.mockResolvedValue(null);
-
-      await expect(service.handleChange()).resolves.toMatchObject({ reason: 'self-write' });
-      await expect(service.handleChange()).resolves.toMatchObject({ reason: 'self-write' });
-      expect(repository.record).not.toHaveBeenCalled();
-    });
-
-    it('is not recorded when its change arrives after the token expired', async () => {
+    it('is recorded once when its change arrives after the token expired, like a restore', async () => {
       let now = NOW;
       const service = createService({ now: () => now });
       await service.writeComposedText(JOINED);
       now += SELF_WRITE_TTL_MS + 1;
 
-      await expect(service.handleChange()).resolves.toMatchObject({ reason: 'self-write' });
-      expect(repository.record).not.toHaveBeenCalled();
+      await expect(service.handleChange()).resolves.toMatchObject({ status: 'recorded' });
+      expect(repository.records.map((record) => record.content)).toEqual([JOINED]);
     });
 
-    it('is recognised by content only while the clipboard still holds it', async () => {
-      const service = createService();
+    it('is recorded once, as an ordinary clip, when its marker cannot be read (known limit)', async () => {
+      const clipboard = new SystemClipboard();
+      const service = createService({ io: clipboard.io, probe: clipboard.probe });
       await service.writeComposedText(JOINED);
-      io.readWriteMarker.mockResolvedValue(null);
-      io.text = 'copied elsewhere';
-      await expect(service.handleChange()).resolves.toMatchObject({ status: 'recorded' });
+      vi.spyOn(clipboard.io, 'readWriteMarker').mockResolvedValue(null);
 
-      // The clipboard moved on: the same text copied again from another app is a real copy.
-      io.text = JOINED;
-      await expect(service.handleChange()).resolves.toMatchObject({ status: 'recorded' });
-      expect(repository.records.map((record) => record.content)).toEqual([
-        'copied elsewhere',
-        JOINED,
-      ]);
-    });
-
-    it('ends content recognition at a private copy too', async () => {
-      const service = createService();
-      await service.writeComposedText(JOINED);
-      io.readWriteMarker.mockResolvedValue(null);
-      probe.result = { exe: null, url: null, hasPrivateFormat: true };
-      await expect(service.handleChange()).resolves.toMatchObject({ reason: 'private-format' });
-
-      probe.result = { exe: null, url: null, hasPrivateFormat: false };
-      io.text = JOINED;
-      await expect(service.handleChange()).resolves.toMatchObject({ status: 'recorded' });
+      // It is what the user just copied; no content guess that could swallow a real copy.
+      await expect(service.handleChange()).resolves.toMatchObject({
+        status: 'recorded',
+        created: true,
+      });
+      expect(repository.records.map((record) => record.content)).toEqual([JOINED]);
     });
 
     it('leaves nothing behind from a failed write', async () => {
@@ -464,11 +440,58 @@ describe('CaptureService', () => {
       await expect(service.writeComposedText(JOINED)).rejects.toThrow('OpenClipboard');
 
       io.text = JOINED;
-      io.readWriteMarker.mockResolvedValue(null);
       await expect(service.handleChange()).resolves.toMatchObject({ status: 'recorded' });
     });
 
-    it('keeps restores on marker-only suppression (a missed marker is a harmless bump)', async () => {
+    describe('an identical copy from another app is always recorded', () => {
+      let clipboard: SystemClipboard;
+      let now: number;
+      let service: CaptureService;
+
+      beforeEach(() => {
+        clipboard = new SystemClipboard();
+        now = NOW;
+        service = createService({ io: clipboard.io, probe: clipboard.probe, now: () => now });
+      });
+
+      it('right after the composed write, before its own report', async () => {
+        await service.writeComposedText(JOINED);
+        clipboard.copy(JOINED, { exe: 'notepad.exe' });
+
+        await expect(service.handleChange()).resolves.toMatchObject({ status: 'recorded' });
+      });
+
+      it('after the composed write was skipped', async () => {
+        await service.writeComposedText(JOINED);
+        await expect(service.handleChange()).resolves.toMatchObject({ reason: 'self-write' });
+
+        clipboard.copy(JOINED, { exe: 'notepad.exe' });
+        await expect(service.handleChange()).resolves.toMatchObject({ status: 'recorded' });
+        expect(repository.records.map((record) => record.content)).toEqual([JOINED]);
+      });
+
+      it('a day later, and after a restore in between', async () => {
+        await service.writeComposedText(JOINED);
+        await expect(service.handleChange()).resolves.toMatchObject({ reason: 'self-write' });
+        await service.writeWithoutRecording('restored');
+        await expect(service.handleChange()).resolves.toMatchObject({ reason: 'self-write' });
+        now += 24 * 60 * 60 * 1_000;
+
+        clipboard.copy(JOINED, { exe: 'notepad.exe' });
+        await expect(service.handleChange()).resolves.toMatchObject({ status: 'recorded' });
+      });
+
+      it('without clipboard versions too (the portable fallback)', async () => {
+        const portable = createService();
+        await portable.writeComposedText(JOINED);
+        await expect(portable.handleChange()).resolves.toMatchObject({ reason: 'self-write' });
+
+        io.text = JOINED; // copied in another app: no marker
+        await expect(portable.handleChange()).resolves.toMatchObject({ status: 'recorded' });
+      });
+    });
+
+    it('treats restores the same way (a missed marker is a harmless bump)', async () => {
       const service = createService();
       await service.writeWithoutRecording('restored');
       io.readWriteMarker.mockResolvedValue(null);

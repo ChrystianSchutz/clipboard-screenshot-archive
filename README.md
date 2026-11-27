@@ -327,11 +327,11 @@ The E2E suite checks the renderer surface, navigation blocking (to a website and
 | Unit           | Pure logic: JSON diff, search parser, categories, color contrast, capture rules, IPC sender policy, compare state machine, context menu, gallery navigation, Win32 adapter on fake bindings            | `npm test`                                           |
 | Integration    | Real `node:sqlite` in memory: repository, migrations, FTS triggers, settings store; worker threads; model download and verification                                                                    | `npm test`                                           |
 | Benchmark      | 50,000 clips, nine query shapes, 100 ms budget                                                                                                                                                         | `npm run test:bench`                                 |
-| E2E            | 80 Playwright tests against the built Electron app in the sandbox: capture, search, operators, compare, privacy, screenshots and OCR, the gallery, the context menu, multi-selection, themes, security | `npm run test:e2e`                                   |
+| E2E            | 81 Playwright tests against the built Electron app in the sandbox: capture, search, operators, compare, privacy, screenshots and OCR, the gallery, the context menu, multi-selection, themes, security | `npm run test:e2e`                                   |
 | Packaged smoke | Launches the packaged EXE hidden; checks that koffi loads, the Win32 listener registers, React renders and IPC round-trips through the preload                                                         | `npm run package && node scripts/smoke-packaged.mjs` |
 
-- Vitest runs 1,930 unit and integration tests in 97 files. 17 more are skipped by default: opt-in benchmarks and a few checks that need an OS feature (such as symlinks).
-- Of the 80 E2E tests, 74 run by default. The other 6 only capture screenshots for the README and for visual review.
+- Vitest runs 1,937 unit and integration tests in 97 files. 17 more are skipped by default: opt-in benchmarks and a few checks that need an OS feature (such as symlinks).
+- Of the 81 E2E tests, 75 run by default. The other 6 only capture screenshots for the README and for visual review.
 - `npm run check` runs typecheck, ESLint, Prettier and the unit suite in one go.
 - The E2E suite is windowless (see the sandbox above). Run it while you work: it never steals focus or touches your clipboard.
 

@@ -169,7 +169,7 @@ describe('registerIpcHandlers', () => {
       ['history:query', 'an unknown query key', [{ sql: 'DROP TABLE clips' }]],
       ['history:query', 'an unknown kind', [{ kind: 'video' }]],
       ['history:query', 'an unknown category', [{ category: 'malware' }]],
-      ['history:query', 'a limit above the maximum page size', [{ limit: 501 }]],
+      ['history:query', 'a limit above the maximum page size', [{ limit: 1_001 }]],
       ['history:query', 'an overlong search text', [{ text: 'x'.repeat(501) }]],
       ['settings:update', 'maxClips below the minimum', [{ maxClips: 1 }]],
       ['settings:update', 'an unknown theme', [{ theme: 'neon' }]],

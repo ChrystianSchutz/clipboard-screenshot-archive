@@ -5,8 +5,8 @@ import type { ClipRepository } from '../storage/clip-repository';
 export interface HistoryCopyDeps {
   readonly repository: Pick<ClipRepository, 'sizesOf' | 'contentsOf'>;
   /**
-   * Puts composed text on the clipboard without recording it, recognised by its content as well
-   * as its write marker (`CaptureService.writeComposedText`).
+   * Puts composed text on the clipboard without recording it, skipped by its write marker like a
+   * restore (`CaptureService.writeComposedText`).
    */
   readonly write: (text: string) => Promise<void>;
 }

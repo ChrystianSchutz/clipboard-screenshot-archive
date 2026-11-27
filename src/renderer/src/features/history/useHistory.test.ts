@@ -42,12 +42,14 @@ function server(total: number, budget: number) {
 }
 
 /** A history that grows at the top, as new copies arrive, served like `server`. */
-function growingServer(total: number, budget: number) {
+function growingServer(total: number, budget: number, nextPage?: number) {
   let all = rows(total);
   const query = vi.fn((request: HistoryQuery): Promise<HistoryPage> => {
     const start = request.before ? all.findIndex((row) => row.id < request.before!.id) : 0;
     const from = start === -1 ? all.length : start;
-    const page = all.slice(from, from + Math.min(request.limit ?? 60, budget));
+    // `nextPage`: the size of a "load more" page, so a test reaches a deep scroll in a few steps.
+    const size = request.before && nextPage ? nextPage : (request.limit ?? 60);
+    const page = all.slice(from, from + Math.min(size, budget));
     const last = page.at(-1);
     const more = from + page.length < all.length;
     return Promise.resolve({ clips: page, nextCursor: more && last ? cursorOf(last) : null });
@@ -199,5 +201,116 @@ describe('useHistory refresh', () => {
     expect(result.current.list.selectedIds).toEqual(selectedBefore);
     expect(result.current.list.selectedIds).toHaveLength(60);
     expect(result.current.actions.confirmingDelete).toBe(true);
+  });
+
+  it('regression: equal filters built anew (a new source app) do not reload the list', async () => {
+    const history = growingServer(200, 500);
+    install(history.query);
+    const { result, rerender } = renderHook(
+      ({ filters }: { filters: HistoryFilters }) => useHistory(filters),
+      { initialProps: { filters: DEFAULT_FILTERS } },
+    );
+    await waitFor(() => expect(result.current.clips).toHaveLength(60));
+
+    // A copy from a new app: the history reports a change, and the view rebuilds its filters.
+    history.copy(1);
+    act(() => changed?.());
+    rerender({ filters: { ...DEFAULT_FILTERS } });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(result.current.clips).toHaveLength(61));
+    // Before the fix the rebuilt object started a fresh 60-row load that replaced the refresh.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(result.current.clips).toHaveLength(61);
+  });
+
+  it('a real filter change still starts again from the first page', async () => {
+    const history = growingServer(200, 500);
+    install(history.query);
+    const { result, rerender } = renderHook(
+      ({ filters }: { filters: HistoryFilters }) => useHistory(filters),
+      { initialProps: { filters: DEFAULT_FILTERS } },
+    );
+    await waitFor(() => expect(result.current.clips).toHaveLength(60));
+    history.query.mockClear();
+
+    rerender({ filters: { ...DEFAULT_FILTERS, pinnedOnly: true } });
+    await waitFor(() => expect(history.query).toHaveBeenCalledOnce());
+    expect(history.query.mock.calls[0]?.[0]).toMatchObject({ pinnedOnly: true, limit: 60 });
+  });
+
+  it('regression: a refresh deep in a large history keeps every loaded row', async () => {
+    const history = growingServer(6_000, 2_000, 1_245);
+    install(history.query);
+    const { result } = renderHook(() => useHistory(DEFAULT_FILTERS));
+    await waitFor(() => expect(result.current.clips).toHaveLength(60));
+    // Scroll through 5,040 rows, past what a refresh used to reload (5,000).
+    for (const loaded of [1_305, 2_550, 3_795, 5_040]) {
+      act(() => result.current.loadMore());
+      await waitFor(() => expect(result.current.clips).toHaveLength(loaded));
+    }
+    const lastShown = result.current.clips.at(-1);
+
+    history.copy(1);
+    act(() => changed?.());
+    await waitFor(() => expect(result.current.clips).toHaveLength(5_041));
+    expect(result.current.clips.at(-1)).toBe(lastShown);
+    expect(result.current.hasMore).toBe(true);
+  });
+
+  /** Renders the hook and scrolls it through 5,040 rows of a 6,000-row history. */
+  async function deepList(history: ReturnType<typeof growingServer>) {
+    install(history.query);
+    const hook = renderHook(() => useHistory(DEFAULT_FILTERS));
+    await waitFor(() => expect(hook.result.current.clips).toHaveLength(60));
+    for (const loaded of [1_305, 2_550, 3_795, 5_040]) {
+      act(() => hook.result.current.loadMore());
+      await waitFor(() => expect(hook.result.current.clips).toHaveLength(loaded));
+    }
+    history.query.mockClear();
+    return hook;
+  }
+
+  /** Reloads from the top of the list (each refresh round starts with one). */
+  const fullReloads = (query: ReturnType<typeof growingServer>['query']): number =>
+    query.mock.calls.filter(([request]) => !request.before).length;
+
+  it('regression: rapid changes deep in the list run one refresh and one rerun, not six', async () => {
+    const history = growingServer(6_000, 2_000, 1_245);
+    const { result } = await deepList(history);
+
+    // Six copies, each reported while the refresh of the previous one is still paging.
+    for (let copy = 0; copy < 6; copy++) {
+      history.copy(1);
+      act(() => changed?.());
+      await Promise.resolve();
+    }
+
+    await waitFor(() => expect(result.current.clips[0]?.id).toBe(6_006));
+    await waitFor(() => expect(result.current.clips).toHaveLength(5_046));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fullReloads(history.query)).toBe(2);
+    // In pages of up to 1,000 rows: 6 requests per round of 5,046 rows.
+    expect(history.query.mock.calls.length).toBeLessThanOrEqual(12);
+  });
+
+  it('shows the newest row as soon as the first refresh of a burst lands', async () => {
+    const history = growingServer(6_000, 2_000, 1_245);
+    const { result } = await deepList(history);
+    history.copy(6);
+    let landed = 0;
+    history.query.mockImplementation(
+      ((query) => (request: HistoryQuery) => {
+        if (!request.before) landed++;
+        return query(request);
+      })(history.query.getMockImplementation()!),
+    );
+
+    for (let event = 0; event < 6; event++) act(() => changed?.());
+    await waitFor(() => expect(result.current.clips[0]?.id).toBe(6_006));
+    expect(landed).toBeLessThanOrEqual(2);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(landed).toBe(2);
+    expect(result.current.clips).toHaveLength(5_046);
   });
 });

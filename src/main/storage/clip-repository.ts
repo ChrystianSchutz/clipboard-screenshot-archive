@@ -18,7 +18,11 @@ import { transaction } from './database';
 import { ftsMatchExpression, splitSearchTerms } from './full-text';
 
 export const DEFAULT_PAGE_SIZE = 100;
-export const MAX_PAGE_SIZE = 500;
+/**
+ * Most rows in one page. Deep refreshes in the renderer reload everything the user scrolled
+ * through, so larger pages mean fewer round trips; `MAX_PAGE_CHARS` still bounds each response.
+ */
+export const MAX_PAGE_SIZE = 1_000;
 /**
  * Response size budget for one history page, in preview characters. A page stops early (and
  * returns a cursor) rather than exceed it, so no query can push megabytes through IPC.

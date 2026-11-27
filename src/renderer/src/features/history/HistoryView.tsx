@@ -159,7 +159,10 @@ export function HistoryView({
 
   const remove = useCallback(
     async (id: number) => {
-      updateSelection(() => selectOnly(focusAfterRemoval(ids, new Set([id]))));
+      const next = focusAfterRemoval(ids, new Set([id]));
+      updateSelection(() => selectOnly(next));
+      // The last clip: the preview (and its Delete button) goes away with the list.
+      if (next === null) searchRef.current?.focus({ preventScroll: true });
       if (markedId === id) setMarkedId(null);
       await api.history.remove(id);
       onNotify('Deleted');
@@ -170,9 +173,12 @@ export function HistoryView({
   /**
    * After the summary pane's buttons go away (a delete, a cancelled delete), focus goes to the list
    * unless it is in the search box, so the arrow keys keep working instead of landing on the page.
+   * When nothing is left to show (`remaining` false), the list goes away too: focus goes to the
+   * search box, which stays, so Esc and typing still reach the view.
    */
-  const keepKeyboardInList = useCallback(() => {
-    if (document.activeElement !== searchRef.current)
+  const keepKeyboardInView = useCallback((remaining = true) => {
+    if (!remaining) searchRef.current?.focus({ preventScroll: true });
+    else if (document.activeElement !== searchRef.current)
       listRef.current?.focus({ preventScroll: true });
   }, []);
 
@@ -180,9 +186,9 @@ export function HistoryView({
     (next: number | null) => {
       if (markedId !== null && selection.selected.has(markedId)) setMarkedId(null);
       updateSelection(() => selectOnly(next));
-      keepKeyboardInList();
+      keepKeyboardInView(next !== null);
     },
-    [markedId, selection, updateSelection, keepKeyboardInList],
+    [markedId, selection, updateSelection, keepKeyboardInView],
   );
   const many = useSelectionActions({
     noun: 'clip',
@@ -245,7 +251,7 @@ export function HistoryView({
 
   const cancelDelete = (): void => {
     many.cancelDelete();
-    keepKeyboardInList();
+    keepKeyboardInView();
   };
 
   /** Ctrl+A selects every row from the list, or from the search box while it is empty. */

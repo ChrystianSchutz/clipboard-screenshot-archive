@@ -324,7 +324,7 @@ test.describe('multi-selection in History', () => {
     expect(await clipboardArchive.readClipboard()).toBe('six');
   });
 
-  test('a new copy arriving keeps all 60 selected rows and the pending delete', async ({
+  test('a new copy from a new app keeps all 60 selected rows and the pending delete', async ({
     clipboardArchive,
   }) => {
     const { palette } = clipboardArchive;
@@ -341,7 +341,8 @@ test.describe('multi-selection in History', () => {
     const confirm = summaryPane(palette).getByRole('alert');
     await expect(confirm).toContainText('Delete 60 clips?');
 
-    await clipboardArchive.copy('new arrival');
+    // From an app not in the history yet: the app filter's list changes too.
+    await clipboardArchive.copy('new arrival', { exe: 'Obsidian.exe' });
     await expect(palette.locator('.clip-row')).toHaveCount(61);
     await expect(palette.locator('.clip-row').first()).toContainText('new arrival');
     // The refresh used to reload 60 rows: the oldest fell off, and with it the selection on it.
@@ -352,6 +353,24 @@ test.describe('multi-selection in History', () => {
 
     await palette.keyboard.press('Escape');
     await expect(confirm).toHaveCount(0);
+  });
+
+  test('deleting every row leaves the keyboard in the view, on the search box', async ({
+    clipboardArchive,
+  }) => {
+    const { palette } = clipboardArchive;
+    await copyAll(clipboardArchive, ['one', 'two', 'three']);
+    await row(palette, 'three').click();
+    await palette.keyboard.press('ControlOrMeta+a');
+    await palette.keyboard.press('Delete');
+    await summaryPane(palette).getByRole('alert').getByRole('button', { name: 'Delete' }).click();
+
+    await expect(palette.locator('.clip-row')).toHaveCount(0);
+    const search = palette.getByRole('searchbox', { name: 'Search history' });
+    // It used to be left on the page body, where Esc missed the view's handler.
+    await expect(search).toBeFocused();
+    await palette.keyboard.type('gone');
+    await expect(search).toHaveValue('gone');
   });
 
   test('Ctrl+D compares two selected text clips, the older one as A', async ({
@@ -511,6 +530,11 @@ test.describe('multi-selection in the Screenshots gallery', () => {
     await expect(palette.locator('.toast')).toContainText('Deleted 2 screenshots');
     await expect(tiles.nth(0)).toHaveAttribute('aria-selected', 'true');
     await expect(tiles.nth(0)).toBeFocused();
+
+    // Deleting the last tile moves focus to the search box (no tile is left to take it).
+    await palette.keyboard.press('Delete');
+    await expect(tiles).toHaveCount(0);
+    await expect(search).toBeFocused();
   });
 });
 

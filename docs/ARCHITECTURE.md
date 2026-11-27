@@ -68,6 +68,8 @@ Change detection is **exact** on Windows and macOS: a native counter moves on ev
 
 Linux and other platforms use the **fallback fingerprint** (`PollingClipboardWatcher`). Every poll reads the format list (`clipboard.read()` item types, no payload), the app's write-marker token and the text. An identical copy from another app right after the app's own restore is still seen, because the marker disappears. The image payload is read only when the clipboard holds an image and no text: at once after each cheap change (format list, marker, text hash), then every 2 s while it stays the same. A poll takes the capture generation when it begins, so a copy sampled while capture was paused is never recorded, even if capture resumes before the read ends. Without a counter, an image capture is bound to the write marker read with the text, checked right before and right after the pixel read, so a restore that replaced the image while the capture waited is never stored.
 
+**Known limit of the app's own writes:** a restore or a composed copy (joined clips, a screenshot's text) is skipped only by its write marker; where the marker cannot be read, it is recorded once as an ordinary clip, never by guessing from the text, so a genuine identical copy is never lost.
+
 **Known limits of the fallback fingerprint** (Windows and macOS use native counters and have neither):
 
 - Two image-only copies in a row with the same formats are told apart only by the 2 s image probe. If the second image is replaced (for example by a text copy) before the next probe, it is lost: it is no longer on the clipboard when the change is noticed.

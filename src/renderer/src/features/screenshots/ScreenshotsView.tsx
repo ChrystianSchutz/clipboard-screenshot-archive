@@ -118,11 +118,15 @@ export function ScreenshotsView({
     return () => observer.disconnect();
   }, [hasMore, loadMore]);
 
-  /** Selects just this tile and moves keyboard focus onto it. */
+  /**
+   * Selects just this tile and moves keyboard focus onto it. With no tile left (the last ones were
+   * deleted), focus goes to the search box, which stays, so Esc and typing still reach the view.
+   */
   const focusTile = useCallback(
     (id: number | null) => {
       updateSelection(() => selectOnly(id));
       if (id !== null) document.getElementById(tileId(id))?.focus();
+      else searchRef.current?.focus({ preventScroll: true });
     },
     [updateSelection],
   );
@@ -143,7 +147,8 @@ export function ScreenshotsView({
   const remove = useCallback(
     async (id: number, keepFocus: boolean) => {
       const next = focusAfterRemoval(ids, new Set([id]));
-      if (keepFocus) focusTile(next);
+      // The last screenshot: its preview goes away too, so focus moves to the search box.
+      if (keepFocus || next === null) focusTile(next);
       else updateSelection(() => selectOnly(next));
       await api.history.remove(id);
       onNotify('Deleted');
